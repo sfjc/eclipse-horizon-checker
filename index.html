@@ -1,0 +1,1219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Eclipse Horizon Checker — 12 August 2026</title>
+<meta name="description" content="Check whether terrain will block your view of the 2026 total solar eclipse from any location in Spain. Uses SRTM elevation data to compute horizon profiles.">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:ital,wght@0,400;0,500;0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg-deep: #0a0c14;
+    --bg-panel: #111827;
+    --bg-card: #1a2236;
+    --bg-card-hover: #1f2942;
+    --border: #2a3550;
+    --border-light: #374766;
+    --text: #e2e8f0;
+    --text-muted: #8899b4;
+    --text-dim: #5a6b88;
+    --gold: #f5c542;
+    --gold-bright: #ffd866;
+    --gold-dim: #c49a2a;
+    --corona: #ff9f43;
+    --green: #48d89b;
+    --green-dim: #2a7d5a;
+    --red: #f05454;
+    --red-dim: #8b2d2d;
+    --blue: #5b9bf5;
+    --eclipse-path: rgba(245, 197, 66, 0.12);
+    --eclipse-center: rgba(245, 197, 66, 0.6);
+    --eclipse-limit: rgba(245, 197, 66, 0.3);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'DM Sans', system-ui, sans-serif;
+    background: var(--bg-deep);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* --- Header --- */
+  .header {
+    background: linear-gradient(135deg, var(--bg-panel) 0%, #0d1525 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 1rem 1.5rem;
+    display: flex; align-items: center; gap: 1rem;
+    position: relative; z-index: 1000;
+  }
+  .header-icon {
+    width: 42px; height: 42px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, var(--gold) 0%, var(--corona) 30%, transparent 70%),
+                radial-gradient(circle, #111 28%, transparent 30%);
+    flex-shrink: 0;
+    box-shadow: 0 0 20px rgba(245,197,66,0.3);
+  }
+  .header h1 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 1.35rem; font-weight: 400; color: var(--gold);
+    line-height: 1.2;
+  }
+  .header .subtitle {
+    font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;
+    font-family: 'DM Sans', sans-serif;
+  }
+  .header-right {
+    margin-left: auto; display: flex; gap: 0.5rem; align-items: center;
+  }
+  .btn-help {
+    background: transparent; border: 1px solid var(--border);
+    color: var(--text-muted); font-size: 0.8rem; padding: 0.4rem 0.8rem;
+    border-radius: 6px; cursor: pointer; font-family: inherit;
+    transition: all 0.2s;
+  }
+  .btn-help:hover { border-color: var(--gold-dim); color: var(--gold); }
+
+  /* --- Layout --- */
+  .layout {
+    display: grid;
+    grid-template-columns: 1fr 400px;
+    height: calc(100vh - 66px);
+  }
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; grid-template-rows: 50vh 1fr; }
+  }
+
+  /* --- Map --- */
+  .map-container { position: relative; }
+  #map { width: 100%; height: 100%; background: var(--bg-deep); }
+  .leaflet-container { background: var(--bg-deep) !important; }
+
+  .map-overlay-coords {
+    position: absolute; bottom: 12px; left: 12px; z-index: 800;
+    background: rgba(17,24,39,0.92); backdrop-filter: blur(8px);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.5rem 0.75rem; font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem; color: var(--text-muted);
+    pointer-events: none;
+  }
+
+  /* --- Sidebar --- */
+  .sidebar {
+    background: var(--bg-panel);
+    border-left: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  @media (max-width: 900px) {
+    .sidebar { border-left: none; border-top: 1px solid var(--border); }
+  }
+
+  .sidebar-tabs {
+    display: flex; border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .sidebar-tab {
+    flex: 1; padding: 0.65rem 0.5rem; text-align: center;
+    font-size: 0.78rem; font-weight: 500; color: var(--text-dim);
+    cursor: pointer; border-bottom: 2px solid transparent;
+    transition: all 0.2s; background: none; border-top: none;
+    border-left: none; border-right: none; font-family: inherit;
+  }
+  .sidebar-tab:hover { color: var(--text-muted); }
+  .sidebar-tab.active {
+    color: var(--gold); border-bottom-color: var(--gold);
+  }
+
+  .sidebar-content {
+    flex: 1; overflow-y: auto; padding: 1rem;
+  }
+  .sidebar-content::-webkit-scrollbar { width: 6px; }
+  .sidebar-content::-webkit-scrollbar-track { background: transparent; }
+  .sidebar-content::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* --- Input panel --- */
+  .input-section { margin-bottom: 1.25rem; }
+  .input-section label {
+    display: block; font-size: 0.75rem; font-weight: 500;
+    color: var(--text-muted); margin-bottom: 0.4rem;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .coord-input-row { display: flex; gap: 0.5rem; }
+  .coord-input-row input {
+    flex: 1; background: var(--bg-card); border: 1px solid var(--border);
+    color: var(--text); padding: 0.55rem 0.65rem; border-radius: 6px;
+    font-family: 'JetBrains Mono', monospace; font-size: 0.82rem;
+    outline: none; transition: border-color 0.2s;
+  }
+  .coord-input-row input:focus { border-color: var(--gold-dim); }
+  .coord-input-row input::placeholder { color: var(--text-dim); }
+
+  .paste-hint {
+    font-size: 0.7rem; color: var(--text-dim); margin-top: 0.3rem;
+    font-style: italic;
+  }
+
+  .input-row { display: flex; gap: 0.5rem; align-items: end; }
+  .input-row .field { flex: 1; }
+  .input-row input, .input-row select {
+    width: 100%; background: var(--bg-card); border: 1px solid var(--border);
+    color: var(--text); padding: 0.55rem 0.65rem; border-radius: 6px;
+    font-family: 'JetBrains Mono', monospace; font-size: 0.82rem;
+    outline: none;
+  }
+  .input-row input:focus { border-color: var(--gold-dim); }
+
+  .btn-primary {
+    width: 100%; padding: 0.7rem 1rem; border: none; border-radius: 8px;
+    background: linear-gradient(135deg, var(--gold-dim) 0%, var(--gold) 100%);
+    color: var(--bg-deep); font-weight: 700; font-size: 0.85rem;
+    cursor: pointer; font-family: inherit; transition: all 0.2s;
+    margin-top: 0.75rem; letter-spacing: 0.02em;
+  }
+  .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(245,197,66,0.3); }
+  .btn-primary:disabled {
+    opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none;
+  }
+
+  .btn-secondary {
+    width: 100%; padding: 0.55rem 0.75rem; border: 1px solid var(--border);
+    border-radius: 6px; background: transparent; color: var(--text-muted);
+    font-size: 0.78rem; cursor: pointer; font-family: inherit;
+    transition: all 0.2s; margin-top: 0.5rem;
+  }
+  .btn-secondary:hover { border-color: var(--gold-dim); color: var(--gold); }
+
+  /* --- Results --- */
+  .result-card {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1rem; margin-bottom: 0.75rem;
+    transition: border-color 0.2s;
+  }
+  .result-card:hover { border-color: var(--border-light); }
+  .result-card.visible { border-left: 3px solid var(--green); }
+  .result-card.blocked { border-left: 3px solid var(--red); }
+
+  .result-name {
+    font-family: 'DM Serif Display', serif;
+    font-size: 1rem; color: var(--text); margin-bottom: 0.5rem;
+    display: flex; align-items: center; gap: 0.5rem;
+  }
+  .result-name .badge {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.65rem; font-weight: 700; padding: 0.15rem 0.45rem;
+    border-radius: 4px; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .badge-visible { background: var(--green-dim); color: var(--green); }
+  .badge-blocked { background: var(--red-dim); color: var(--red); }
+
+  .result-stats {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+  .stat {
+    background: var(--bg-panel); border-radius: 6px; padding: 0.5rem 0.6rem;
+  }
+  .stat-label { font-size: 0.65rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+  .stat-value { font-family: 'JetBrains Mono', monospace; font-size: 0.95rem; font-weight: 500; margin-top: 0.15rem; }
+  .stat-value.positive { color: var(--green); }
+  .stat-value.negative { color: var(--red); }
+
+  .horizon-chart {
+    width: 100%; height: 120px; background: var(--bg-panel);
+    border-radius: 6px; overflow: hidden; position: relative;
+  }
+  .horizon-chart canvas { width: 100%; height: 100%; }
+
+  .result-actions {
+    display: flex; gap: 0.5rem; margin-top: 0.5rem;
+  }
+  .btn-tiny {
+    font-size: 0.7rem; color: var(--text-dim); background: none;
+    border: 1px solid var(--border); padding: 0.3rem 0.5rem;
+    border-radius: 4px; cursor: pointer; font-family: inherit;
+    transition: all 0.15s;
+  }
+  .btn-tiny:hover { color: var(--text-muted); border-color: var(--border-light); }
+  .btn-tiny.danger:hover { color: var(--red); border-color: var(--red-dim); }
+
+  /* --- Progress --- */
+  .progress-container {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1rem; margin-bottom: 0.75rem;
+    text-align: center;
+  }
+  .progress-bar-outer {
+    width: 100%; height: 6px; background: var(--bg-panel);
+    border-radius: 3px; overflow: hidden; margin: 0.75rem 0;
+  }
+  .progress-bar-inner {
+    height: 100%; background: linear-gradient(90deg, var(--gold-dim), var(--gold));
+    border-radius: 3px; transition: width 0.3s;
+    width: 0%;
+  }
+  .progress-text {
+    font-size: 0.78rem; color: var(--text-muted);
+  }
+
+  /* --- Comparison table --- */
+  .comparison-table {
+    width: 100%; border-collapse: collapse; font-size: 0.75rem;
+    margin-top: 0.75rem;
+  }
+  .comparison-table th {
+    text-align: left; padding: 0.5rem 0.4rem; color: var(--text-dim);
+    font-weight: 500; border-bottom: 1px solid var(--border);
+    font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .comparison-table td {
+    padding: 0.45rem 0.4rem; border-bottom: 1px solid rgba(42,53,80,0.5);
+    font-family: 'JetBrains Mono', monospace; font-size: 0.78rem;
+  }
+  .comparison-table tr:hover td { background: var(--bg-card); }
+
+  /* --- Help panel --- */
+  .help-section { margin-bottom: 1.5rem; }
+  .help-section h3 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 1rem; color: var(--gold); margin-bottom: 0.5rem;
+  }
+  .help-section p, .help-section li {
+    font-size: 0.82rem; color: var(--text-muted); line-height: 1.6;
+    margin-bottom: 0.4rem;
+  }
+  .help-section ul { padding-left: 1.2rem; }
+  .help-section code {
+    font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;
+    background: var(--bg-card); padding: 0.1rem 0.35rem;
+    border-radius: 3px; color: var(--gold-bright);
+  }
+  .credit {
+    font-size: 0.7rem; color: var(--text-dim); margin-top: 1.5rem;
+    padding-top: 1rem; border-top: 1px solid var(--border);
+    line-height: 1.5;
+  }
+  .credit a { color: var(--gold-dim); text-decoration: none; }
+  .credit a:hover { color: var(--gold); }
+
+  /* --- Empty state --- */
+  .empty-state {
+    text-align: center; padding: 2rem 1rem;
+    color: var(--text-dim);
+  }
+  .empty-state .icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
+  .empty-state h3 {
+    font-family: 'DM Serif Display', serif;
+    color: var(--text-muted); font-size: 1.05rem; margin-bottom: 0.5rem;
+  }
+  .empty-state p { font-size: 0.82rem; line-height: 1.5; }
+
+  /* --- Leaflet overrides --- */
+  .leaflet-popup-content-wrapper {
+    background: var(--bg-card) !important;
+    color: var(--text) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4) !important;
+  }
+  .leaflet-popup-tip { background: var(--bg-card) !important; }
+  .leaflet-popup-content { font-family: 'DM Sans', sans-serif !important; font-size: 0.82rem !important; }
+
+  /* Loading spinner */
+  .spinner {
+    display: inline-block; width: 16px; height: 16px;
+    border: 2px solid var(--border); border-top-color: var(--gold);
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+    vertical-align: middle; margin-right: 0.4rem;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* --- Path legend on map --- */
+  .map-legend {
+    position: absolute; top: 12px; right: 12px; z-index: 800;
+    background: rgba(17,24,39,0.92); backdrop-filter: blur(8px);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.6rem 0.75rem; font-size: 0.7rem; color: var(--text-muted);
+    pointer-events: none;
+  }
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.25rem; }
+  .legend-item:last-child { margin-bottom: 0; }
+  .legend-swatch {
+    width: 18px; height: 3px; border-radius: 2px; flex-shrink: 0;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-icon"></div>
+  <div>
+    <h1>Eclipse Horizon Checker</h1>
+    <div class="subtitle">12 August 2026 — Total Solar Eclipse — Spain &amp; Iceland</div>
+  </div>
+  <div class="header-right">
+    <button class="btn-help" onclick="switchTab('help')">How it works</button>
+  </div>
+</div>
+
+<div class="layout">
+  <div class="map-container">
+    <div id="map"></div>
+    <div class="map-overlay-coords" id="coordsDisplay">Click map to place a pin</div>
+    <div class="map-legend">
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--gold)"></div> Centerline</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--gold); opacity:0.4"></div> Path of totality</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--corona); height:6px; width:6px; border-radius:50%;"></div> Your pins</div>
+    </div>
+  </div>
+
+  <div class="sidebar">
+    <div class="sidebar-tabs">
+      <button class="sidebar-tab active" data-tab="pins" onclick="switchTab('pins')">Pins</button>
+      <button class="sidebar-tab" data-tab="results" onclick="switchTab('results')">Results</button>
+      <button class="sidebar-tab" data-tab="help" onclick="switchTab('help')">Help</button>
+    </div>
+    <div class="sidebar-content">
+
+      <!-- PINS TAB -->
+      <div class="tab-panel active" id="tab-pins">
+        <div class="input-section">
+          <label>Add a location</label>
+          <div class="coord-input-row">
+            <input type="text" id="inputLat" placeholder="Latitude" />
+            <input type="text" id="inputLon" placeholder="Longitude" />
+          </div>
+          <p class="paste-hint">Paste from Google Maps, e.g. "42.1245, -4.4983"</p>
+        </div>
+        <div class="input-section">
+          <div class="input-row">
+            <div class="field">
+              <label>Name (optional)</label>
+              <input type="text" id="inputName" placeholder="My hilltop" />
+            </div>
+            <div class="field" style="max-width:100px">
+              <label>Height (m)</label>
+              <input type="number" id="inputHeight" value="2" min="0" max="100" step="1" />
+            </div>
+          </div>
+        </div>
+        <button class="btn-primary" id="btnAddPin" onclick="addPinFromInput()">Add pin</button>
+        <button class="btn-secondary" onclick="analyzeAllPins()" id="btnAnalyze" disabled>
+          Analyze all pins
+        </button>
+
+        <div id="pinList" style="margin-top:1rem">
+          <div class="empty-state">
+            <div class="icon">📍</div>
+            <h3>No pins yet</h3>
+            <p>Click on the map or enter coordinates above to add candidate viewing locations.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- RESULTS TAB -->
+      <div class="tab-panel" id="tab-results">
+        <div id="resultsList">
+          <div class="empty-state">
+            <div class="icon">🔭</div>
+            <h3>No results yet</h3>
+            <p>Add pins to candidate locations, then click "Analyze all pins" to compute horizon visibility.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- HELP TAB -->
+      <div class="tab-panel" id="tab-help">
+        <div class="help-section">
+          <h3>What is this?</h3>
+          <p>On <strong>12 August 2026</strong>, a total solar eclipse will cross northern Spain. Because the eclipse occurs near sunset, the sun will be very low — between 2° and 13° above the horizon depending on your location. Even a small hill to the west-northwest could block your view.</p>
+          <p>This tool uses satellite elevation data (SRTM, ~30 m resolution) to compute the terrain horizon from any candidate observation point, and tells you whether the eclipsed sun will be visible or blocked.</p>
+        </div>
+        <div class="help-section">
+          <h3>How to use it</h3>
+          <ul>
+            <li><strong>Click the map</strong> to drop a pin at a candidate viewing location</li>
+            <li>Or <strong>paste coordinates</strong> from Google Maps into the fields above</li>
+            <li>Set the <strong>observer height</strong> — your eye height above ground. Use 2 m for flat ground, 5–10 m if standing on a castle wall or rooftop.</li>
+            <li>Click <strong>"Analyze all pins"</strong> to run the horizon computation</li>
+            <li>Results show the clearance margin: positive = sun visible, negative = blocked by terrain</li>
+          </ul>
+        </div>
+        <div class="help-section">
+          <h3>Eclipse geometry</h3>
+          <p>The sun's position at the moment of totality depends on where you are within the path:</p>
+          <ul>
+            <li><strong>North coast</strong> (A Coruña – Bilbao): sun at ~10–13° altitude, ~278° azimuth</li>
+            <li><strong>Meseta</strong> (Palencia, Valladolid): ~8–10° altitude, ~281° azimuth</li>
+            <li><strong>South edge</strong> (near Madrid): ~6–8° altitude, ~283° azimuth</li>
+            <li><strong>Mediterranean / Balearics</strong>: ~2–5° altitude, ~286° azimuth</li>
+          </ul>
+          <p>This tool automatically computes the correct sun position for each pin based on NASA eclipse path data.</p>
+        </div>
+        <div class="help-section">
+          <h3>Accuracy notes</h3>
+          <ul>
+            <li><strong>Elevation data</strong>: AWS Terrain Tiles (~30 m resolution, derived from SRTM). Adequate for landscape-scale terrain; individual buildings and trees are not resolved.</li>
+            <li><strong>Earth curvature</strong>: Fully corrected, with standard atmospheric refraction (k=0.13).</li>
+            <li><strong>Trees/buildings</strong>: SRTM measures the canopy/roof surface, not bare earth. A forest 5 km away will appear as ~15–20 m of extra terrain. In flat cereal-farming regions (Tierra de Campos), this is rarely an issue.</li>
+            <li><strong>Ray tracing</strong>: Horizon is computed by tracing rays at 0.5° azimuth intervals across a ±20° band around the sun position, sampling elevation every ~40 m out to 40 km.</li>
+          </ul>
+        </div>
+        <div class="help-section">
+          <h3>Python version</h3>
+          <p>For a full 360° horizon analysis with higher-resolution SRTM1 data, download the Python script from the GitHub repository. It produces detailed plots and supports custom analysis.</p>
+        </div>
+        <div class="credit">
+          Eclipse path data: Fred Espenak, NASA/GSFC.<br>
+          Elevation data: AWS Terrain Tiles (Mapzen/Tilezen), derived from SRTM/GMTED.<br>
+          Map tiles: © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors.<br>
+          <a href="https://github.com">View source on GitHub</a>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+// =========================================================================
+//  ECLIPSE PATH DATA — from NASA/Espenak tables (2-minute intervals)
+//  Each row: [UT_minutes, north_lat, north_lon, south_lat, south_lon,
+//             center_lat, center_lon, sun_alt, sun_az]
+//  Coordinates in decimal degrees (W negative).
+//  Covering the approach + Spain + Mediterranean.
+// =========================================================================
+const ECLIPSE_PATH = [
+  // UT_min, N_lat, N_lon, S_lat, S_lon, C_lat, C_lon, alt, az
+  [1104, 55+34.1/60, -(17+1.7/60), 55+4.7/60, -(22+1.5/60), 55+20.6/60, -(19+35.3/60), 23, 263],
+  [1106, 54+33.7/60, -(16+17.7/60), 54+7.1/60, -(21+16.5/60), 54+21.7/60, -(18+50.8/60), 22, 264],
+  [1108, 53+32.8/60, -(15+30.2/60), 53+9.1/60, -(20+29.1/60), 53+22.3/60, -(18+3.4/60), 22, 266],
+  [1110, 52+31.2/60, -(14+38.8/60), 52+10.6/60, -(19+38.8/60), 52+22.3/60, -(17+12.7/60), 21, 267],
+  [1112, 51+28.7/60, -(13+42.7/60), 51+11.6/60, -(18+45.3/60), 51+21.6/60, -(16+18.2/60), 20, 269],
+  [1114, 50+25.0/60, -(12+41.1/60), 50+11.7/60, -(17+47.9/60), 50+20.0/60, -(15+19.0/60), 19, 270],
+  [1116, 49+19.8/60, -(11+32.8/60), 49+10.9/60, -(16+45.9/60), 49+17.1/60, -(14+14.3/60), 18, 272],
+  [1118, 48+12.5/60, -(10+16.0/60), 48+8.8/60, -(15+38.3/60), 48+12.7/60, -(13+2.9/60), 17, 273],
+  [1120, 47+2.3/60, -(8+48.1/60), 47+5.0/60, -(14+23.8/60), 47+6.1/60, -(11+42.9/60), 16, 275],
+  [1122, 45+48.1/60, -(7+4.6/60), 45+59.0/60, -(13+0.5/60), 45+56.6/60, -(10+11.4/60), 14, 277],
+  [1124, 44+27.4/60, -(4+56.9/60), 44+49.9/60, -(11+25.2/60), 44+42.8/60, -(8+23.9/60), 13, 278],
+  [1126, 42+54.5/60, -(2+5.1/60), 43+36.4/60, -(9+33.1/60), 43+22.3/60, -(6+11.3/60), 10, 281],
+  [1128, 41+49.0/60, 3+11.1/60, 42+15.8/60, -(7+14.2/60), 41+49.0/60, -(3+11.1/60), 8, 283],
+  [1130, 40+39.9/60, 3+17.7/60, 40+41.0/60, -(4+2.4/60), 39+24.5/60, 2+57.0/60, 2, 288],
+];
+
+// =========================================================================
+//  INTERPOLATE SUN POSITION for any observer location
+// =========================================================================
+function getSunPosition(lat, lon) {
+  // Find the two nearest centerline time-points and interpolate.
+  // We use longitude as the primary interpolation axis since the shadow
+  // sweeps roughly W-to-E across Spain.
+  let bestIdx = 0, bestDist = Infinity;
+  for (let i = 0; i < ECLIPSE_PATH.length; i++) {
+    const [,,,,,clat,clon] = ECLIPSE_PATH[i];
+    const d = Math.hypot(lat - clat, lon - clon);
+    if (d < bestDist) { bestDist = d; bestIdx = i; }
+  }
+
+  // Interpolate between bestIdx and a neighbor
+  let i0 = Math.max(0, bestIdx - 1), i1 = Math.min(ECLIPSE_PATH.length - 1, bestIdx + 1);
+  if (bestIdx === 0) { i0 = 0; i1 = 1; }
+  if (bestIdx === ECLIPSE_PATH.length - 1) { i0 = ECLIPSE_PATH.length - 2; i1 = ECLIPSE_PATH.length - 1; }
+
+  const [,,,,,clat0,clon0,alt0,az0] = ECLIPSE_PATH[i0];
+  const [,,,,,clat1,clon1,alt1,az1] = ECLIPSE_PATH[i1];
+
+  // Interpolation factor based on longitude
+  const dlon = clon1 - clon0;
+  const t = dlon !== 0 ? Math.max(0, Math.min(1, (lon - clon0) / dlon)) : 0.5;
+
+  // Latitude correction: farther from centerline = slightly different timing
+  const centerLat = clat0 + t * (clat1 - clat0);
+  const latOffset = lat - centerLat;
+  // Being north of center means slightly earlier timing (higher sun), vice versa
+  const latCorrection = latOffset * 0.15; // empirical: ~0.15° alt per degree of latitude
+
+  const sunAlt = Math.max(0.5, alt0 + t * (alt1 - alt0) + latCorrection);
+  const sunAz = az0 + t * (az1 - az0);
+
+  // Check if within path of totality
+  const [,nlat0,nlon0,slat0,slon0] = ECLIPSE_PATH[i0];
+  const [,nlat1,nlon1,slat1,slon1] = ECLIPSE_PATH[i1];
+  const nLat = nlat0 + t * (nlat1 - nlat0);
+  const sLat = slat0 + t * (slat1 - slat0);
+  const inPath = lat <= Math.max(nLat, sLat) + 0.5 && lat >= Math.min(nLat, sLat) - 0.5;
+
+  return { sunAlt, sunAz, inPath, centerLat };
+}
+
+
+// =========================================================================
+//  ELEVATION DATA — AWS Terrain Tiles (Terrarium encoding)
+// =========================================================================
+const TILE_ZOOM = 12;
+const TILE_SIZE = 256;
+const tileCache = new Map();
+
+function lonLatToTile(lon, lat, zoom) {
+  const n = 1 << zoom;
+  const x = Math.floor((lon + 180) / 360 * n);
+  const latRad = lat * Math.PI / 180;
+  const y = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n);
+  return { x, y };
+}
+
+function tileToLonLat(x, y, zoom) {
+  const n = 1 << zoom;
+  const lon = x / n * 360 - 180;
+  const latRad = Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n)));
+  return { lon, lat: latRad * 180 / Math.PI };
+}
+
+function loadTile(tx, ty) {
+  const key = `${tx}_${ty}`;
+  if (tileCache.has(key)) return tileCache.get(key);
+
+  const promise = new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = TILE_SIZE; canvas.height = TILE_SIZE;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      const imageData = ctx.getImageData(0, 0, TILE_SIZE, TILE_SIZE);
+      resolve(imageData);
+    };
+    img.onerror = () => resolve(null); // graceful fail
+    img.src = `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${TILE_ZOOM}/${tx}/${ty}.png`;
+  });
+
+  tileCache.set(key, promise);
+  return promise;
+}
+
+async function getElevation(lat, lon) {
+  const { x: tx, y: ty } = lonLatToTile(lon, lat, TILE_ZOOM);
+  const imgData = await loadTile(tx, ty);
+  if (!imgData) return 0;
+
+  // Pixel position within tile
+  const n = 1 << TILE_ZOOM;
+  const xFrac = ((lon + 180) / 360 * n) - tx;
+  const latRad = lat * Math.PI / 180;
+  const yFrac = ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n) - ty;
+
+  const px = Math.min(TILE_SIZE - 1, Math.max(0, Math.floor(xFrac * TILE_SIZE)));
+  const py = Math.min(TILE_SIZE - 1, Math.max(0, Math.floor(yFrac * TILE_SIZE)));
+
+  const idx = (py * TILE_SIZE + px) * 4;
+  const r = imgData.data[idx], g = imgData.data[idx + 1], b = imgData.data[idx + 2];
+  return (r * 256 + g + b / 256) - 32768;
+}
+
+
+// =========================================================================
+//  PRE-FETCH tiles for a region (to enable fast ray tracing)
+// =========================================================================
+async function prefetchTiles(lat, lon, radiusKm) {
+  const degPerKm = 1 / 111.32;
+  const latRange = radiusKm * degPerKm;
+  const lonRange = radiusKm * degPerKm / Math.cos(lat * Math.PI / 180);
+
+  const tileSet = new Set();
+  const step = 0.05; // sample grid
+  for (let dlat = -latRange; dlat <= latRange; dlat += step) {
+    for (let dlon = -lonRange; dlon <= lonRange; dlon += step) {
+      const { x, y } = lonLatToTile(lon + dlon, lat + dlat, TILE_ZOOM);
+      tileSet.add(`${x}_${y}`);
+    }
+  }
+
+  const promises = [];
+  for (const key of tileSet) {
+    const [tx, ty] = key.split('_').map(Number);
+    promises.push(loadTile(tx, ty));
+  }
+  await Promise.all(promises);
+  return tileSet.size;
+}
+
+
+// =========================================================================
+//  HORIZON COMPUTATION
+// =========================================================================
+const EARTH_R = 6371000;
+const REFRACTION_K = 0.13;
+
+function destPoint(lat, lon, azDeg, distM) {
+  const φ = lat * Math.PI / 180, λ = lon * Math.PI / 180;
+  const θ = azDeg * Math.PI / 180, δ = distM / EARTH_R;
+  const φ2 = Math.asin(Math.sin(φ) * Math.cos(δ) + Math.cos(φ) * Math.sin(δ) * Math.cos(θ));
+  const λ2 = λ + Math.atan2(Math.sin(θ) * Math.sin(δ) * Math.cos(φ), Math.cos(δ) - Math.sin(φ) * Math.sin(φ2));
+  return { lat: φ2 * 180 / Math.PI, lon: λ2 * 180 / Math.PI };
+}
+
+async function computeHorizonAngle(lat, lon, azDeg, obsHeight, maxDist = 40000, step = 40) {
+  const obsElev = await getElevation(lat, lon) + obsHeight;
+  const Reff = EARTH_R / (1 - REFRACTION_K);
+
+  let maxAngle = -90, maxDistFound = 0;
+  let dist = step;
+
+  while (dist <= maxDist) {
+    const p = destPoint(lat, lon, azDeg, dist);
+    const tgtElev = await getElevation(p.lat, p.lon);
+    const dh = tgtElev - obsElev;
+    const curvDrop = (dist * dist) / (2 * Reff);
+    const apparentDh = dh - curvDrop;
+    const angle = Math.atan2(apparentDh, dist) * 180 / Math.PI;
+
+    if (angle > maxAngle) {
+      maxAngle = angle;
+      maxDistFound = dist;
+    }
+
+    // Adaptive stepping: go faster when terrain is clearly below horizon
+    if (dist > 10000 && angle < maxAngle - 5) {
+      dist += step * 4;
+    } else {
+      dist += step;
+    }
+  }
+
+  return { angle: maxAngle, distance: maxDistFound };
+}
+
+
+// =========================================================================
+//  FULL ANALYSIS for one pin
+// =========================================================================
+async function analyzePin(pin, progressCb) {
+  const { lat, lon, height, name } = pin;
+  const sun = getSunPosition(lat, lon);
+
+  // Prefetch elevation tiles for the area
+  if (progressCb) progressCb(0, 'Loading elevation data…');
+  const numTiles = await prefetchTiles(lat, lon, 42);
+  if (progressCb) progressCb(10, `Loaded ${numTiles} terrain tiles`);
+
+  // Scan azimuth band: sun ± 20°
+  const halfWidth = 20;
+  const azStep = 0.5;
+  const azStart = sun.sunAz - halfWidth;
+  const azEnd = sun.sunAz + halfWidth;
+  const azimuths = [];
+  const angles = [];
+  const distances = [];
+
+  let i = 0;
+  const total = Math.ceil((azEnd - azStart) / azStep);
+
+  for (let az = azStart; az < azEnd; az += azStep) {
+    const result = await computeHorizonAngle(lat, lon, az, height);
+    azimuths.push(az);
+    angles.push(result.angle);
+    distances.push(result.distance);
+    i++;
+    if (progressCb && i % 4 === 0) {
+      progressCb(10 + 85 * (i / total), `Tracing horizon: ${Math.round(100*i/total)}%`);
+    }
+  }
+
+  // Find horizon at exact sun azimuth
+  let closestIdx = 0, closestDiff = Infinity;
+  for (let j = 0; j < azimuths.length; j++) {
+    const d = Math.abs(azimuths[j] - sun.sunAz);
+    if (d < closestDiff) { closestDiff = d; closestIdx = j; }
+  }
+
+  const horizonAtSun = angles[closestIdx];
+  const margin = sun.sunAlt - horizonAtSun;
+
+  // Worst in band
+  let worstAngle = -90, worstAz = 0;
+  for (let j = 0; j < angles.length; j++) {
+    if (angles[j] > worstAngle) { worstAngle = angles[j]; worstAz = azimuths[j]; }
+  }
+
+  const groundElev = await getElevation(lat, lon);
+
+  if (progressCb) progressCb(100, 'Complete');
+
+  return {
+    name, lat, lon, height,
+    groundElev: Math.round(groundElev),
+    sunAlt: sun.sunAlt,
+    sunAz: sun.sunAz,
+    inPath: sun.inPath,
+    horizonAtSun: horizonAtSun,
+    margin: margin,
+    visible: margin > 0,
+    worstHorizon: worstAngle,
+    worstAz: worstAz,
+    azimuths, angles, distances,
+  };
+}
+
+
+// =========================================================================
+//  UI STATE
+// =========================================================================
+let pins = [];
+let results = [];
+let markers = [];
+let analyzing = false;
+
+// =========================================================================
+//  MAP SETUP
+// =========================================================================
+const map = L.map('map', {
+  center: [42.5, -4.5],
+  zoom: 7,
+  zoomControl: true,
+});
+
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '© <a href="https://www.openstreetmap.org/copyright">OSM</a> © <a href="https://carto.com/">CARTO</a>',
+  maxZoom: 19,
+}).addTo(map);
+
+// Draw eclipse path
+function drawEclipsePath() {
+  const centerCoords = ECLIPSE_PATH.map(r => [r[5], r[6]]);
+  const northCoords = ECLIPSE_PATH.map(r => [r[1], r[2]]);
+  const southCoords = ECLIPSE_PATH.map(r => [r[3], r[4]]);
+
+  // Path of totality (filled polygon)
+  const pathPolygon = [...northCoords, ...southCoords.reverse()];
+  L.polygon(pathPolygon, {
+    color: 'rgba(245,197,66,0.3)', weight: 1,
+    fillColor: 'rgba(245,197,66,0.08)', fillOpacity: 1,
+    interactive: false,
+  }).addTo(map);
+
+  // Centerline
+  L.polyline(centerCoords, {
+    color: '#f5c542', weight: 2, opacity: 0.7,
+    dashArray: '8,6', interactive: false,
+  }).addTo(map);
+
+  // North and south limits
+  L.polyline(northCoords, { color: '#f5c542', weight: 1, opacity: 0.3, interactive: false }).addTo(map);
+  L.polyline(southCoords.reverse(), { color: '#f5c542', weight: 1, opacity: 0.3, interactive: false }).addTo(map);
+}
+drawEclipsePath();
+
+// Mouse coords display
+map.on('mousemove', e => {
+  document.getElementById('coordsDisplay').textContent =
+    `${e.latlng.lat.toFixed(5)}°N, ${e.latlng.lng.toFixed(5)}°${e.latlng.lng >= 0 ? 'E' : 'W'}`;
+});
+
+// Click to add pin
+map.on('click', e => {
+  if (analyzing) return;
+  document.getElementById('inputLat').value = e.latlng.lat.toFixed(5);
+  document.getElementById('inputLon').value = e.latlng.lng.toFixed(5);
+  addPinFromInput();
+});
+
+// Paste handler: support "42.1245, -4.4983" format
+document.getElementById('inputLat').addEventListener('paste', e => {
+  setTimeout(() => {
+    const val = e.target.value.trim();
+    const match = val.match(/^(-?\d+\.?\d*)\s*[,;\s]\s*(-?\d+\.?\d*)$/);
+    if (match) {
+      document.getElementById('inputLat').value = match[1];
+      document.getElementById('inputLon').value = match[2];
+    }
+  }, 50);
+});
+
+
+// =========================================================================
+//  PIN MANAGEMENT
+// =========================================================================
+const pinIcon = L.divIcon({
+  className: '',
+  html: `<div style="width:14px;height:14px;border-radius:50%;background:#ff9f43;border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.4);"></div>`,
+  iconSize: [14, 14],
+  iconAnchor: [7, 7],
+});
+
+const resultIconVisible = L.divIcon({
+  className: '',
+  html: `<div style="width:18px;height:18px;border-radius:50%;background:#48d89b;border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;font-size:10px;">✓</div>`,
+  iconSize: [18, 18], iconAnchor: [9, 9],
+});
+
+const resultIconBlocked = L.divIcon({
+  className: '',
+  html: `<div style="width:18px;height:18px;border-radius:50%;background:#f05454;border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;font-size:10px;">✗</div>`,
+  iconSize: [18, 18], iconAnchor: [9, 9],
+});
+
+function addPinFromInput() {
+  const latStr = document.getElementById('inputLat').value.trim();
+  const lonStr = document.getElementById('inputLon').value.trim();
+  const name = document.getElementById('inputName').value.trim();
+  const height = parseFloat(document.getElementById('inputHeight').value) || 2;
+
+  const lat = parseFloat(latStr), lon = parseFloat(lonStr);
+  if (isNaN(lat) || isNaN(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+    alert('Please enter valid coordinates.');
+    return;
+  }
+
+  const pin = {
+    id: Date.now(),
+    lat, lon, height,
+    name: name || `Pin ${pins.length + 1}`,
+  };
+  pins.push(pin);
+
+  // Add marker to map
+  const marker = L.marker([lat, lon], { icon: pinIcon })
+    .addTo(map)
+    .bindPopup(`<strong>${pin.name}</strong><br>${lat.toFixed(5)}, ${lon.toFixed(5)}<br>Observer height: ${height} m`);
+  markers.push({ id: pin.id, marker });
+
+  // Clear inputs
+  document.getElementById('inputName').value = '';
+  // Don't clear lat/lon so user can see what was entered
+
+  updatePinList();
+  document.getElementById('btnAnalyze').disabled = false;
+}
+
+function removePin(id) {
+  pins = pins.filter(p => p.id !== id);
+  const mi = markers.findIndex(m => m.id === id);
+  if (mi >= 0) {
+    map.removeLayer(markers[mi].marker);
+    markers.splice(mi, 1);
+  }
+  // Also remove from results
+  results = results.filter(r => r.id !== id);
+  updatePinList();
+  updateResultsList();
+  document.getElementById('btnAnalyze').disabled = pins.length === 0;
+}
+
+function updatePinList() {
+  const el = document.getElementById('pinList');
+  if (pins.length === 0) {
+    el.innerHTML = `<div class="empty-state"><div class="icon">📍</div><h3>No pins yet</h3><p>Click on the map or enter coordinates above.</p></div>`;
+    return;
+  }
+
+  let html = '';
+  for (const pin of pins) {
+    const sun = getSunPosition(pin.lat, pin.lon);
+    html += `
+      <div class="result-card" style="padding:0.75rem">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <strong style="font-size:0.88rem">${pin.name}</strong>
+            ${!sun.inPath ? '<span style="font-size:0.65rem;color:var(--corona);margin-left:0.3rem">⚠ near edge</span>' : ''}
+            <div style="font-size:0.72rem;color:var(--text-dim);font-family:JetBrains Mono,monospace;margin-top:0.15rem">
+              ${pin.lat.toFixed(5)}, ${pin.lon.toFixed(5)} · h=${pin.height}m
+            </div>
+            <div style="font-size:0.7rem;color:var(--text-dim);margin-top:0.1rem">
+              Sun: alt ${sun.sunAlt.toFixed(1)}° · az ${sun.sunAz.toFixed(0)}°
+            </div>
+          </div>
+          <button class="btn-tiny danger" onclick="removePin(${pin.id})" title="Remove">✕</button>
+        </div>
+      </div>`;
+  }
+  el.innerHTML = html;
+}
+
+
+// =========================================================================
+//  ANALYSIS
+// =========================================================================
+async function analyzeAllPins() {
+  if (analyzing || pins.length === 0) return;
+  analyzing = true;
+  results = [];
+
+  document.getElementById('btnAnalyze').disabled = true;
+  document.getElementById('btnAddPin').disabled = true;
+  switchTab('results');
+
+  const resultEl = document.getElementById('resultsList');
+
+  for (let i = 0; i < pins.length; i++) {
+    const pin = pins[i];
+
+    // Show progress
+    resultEl.innerHTML = renderProgress(pin.name, i, pins.length, 0, 'Starting…') +
+      results.map(renderResult).join('');
+
+    try {
+      const result = await analyzePin(pin, (pct, msg) => {
+        resultEl.innerHTML = renderProgress(pin.name, i, pins.length, pct, msg) +
+          results.map(renderResult).join('');
+      });
+      result.id = pin.id;
+      results.push(result);
+
+      // Update marker icon
+      const mi = markers.find(m => m.id === pin.id);
+      if (mi) {
+        mi.marker.setIcon(result.visible ? resultIconVisible : resultIconBlocked);
+        mi.marker.setPopupContent(
+          `<strong>${result.name}</strong><br>` +
+          `${result.visible ? '✅ Visible' : '❌ Blocked'} · Margin: ${result.margin.toFixed(1)}°<br>` +
+          `Terrain horizon: ${result.horizonAtSun.toFixed(1)}° · Sun: ${result.sunAlt.toFixed(1)}°`
+        );
+      }
+    } catch (err) {
+      console.error('Analysis failed for', pin.name, err);
+      results.push({
+        id: pin.id, name: pin.name, lat: pin.lat, lon: pin.lon,
+        error: err.message || 'Elevation data unavailable',
+      });
+    }
+  }
+
+  updateResultsList();
+  analyzing = false;
+  document.getElementById('btnAnalyze').disabled = false;
+  document.getElementById('btnAddPin').disabled = false;
+}
+
+function renderProgress(name, siteIdx, totalSites, pct, msg) {
+  return `
+    <div class="progress-container">
+      <div style="font-size:0.82rem;font-weight:500">Analyzing ${name}</div>
+      <div style="font-size:0.7rem;color:var(--text-dim);margin-top:0.2rem">
+        Site ${siteIdx + 1} of ${totalSites}
+      </div>
+      <div class="progress-bar-outer">
+        <div class="progress-bar-inner" style="width:${pct}%"></div>
+      </div>
+      <div class="progress-text"><span class="spinner"></span>${msg}</div>
+    </div>`;
+}
+
+function updateResultsList() {
+  const el = document.getElementById('resultsList');
+  if (results.length === 0) {
+    el.innerHTML = `<div class="empty-state"><div class="icon">🔭</div><h3>No results yet</h3><p>Add pins and click "Analyze all pins".</p></div>`;
+    return;
+  }
+
+  // Sort by margin (best first)
+  const sorted = [...results].sort((a, b) => (b.margin || -999) - (a.margin || -999));
+  el.innerHTML = sorted.map((r, i) => renderResult(r, i)).join('');
+
+  // Draw charts after DOM update
+  requestAnimationFrame(() => {
+    for (const r of sorted) {
+      if (r.azimuths) drawHorizonChart(r);
+    }
+  });
+}
+
+
+// =========================================================================
+//  RESULT RENDERING
+// =========================================================================
+function renderResult(r, rank) {
+  if (r.error) {
+    return `<div class="result-card"><div class="result-name">${r.name} <span class="badge" style="background:#553;color:#aa8">ERROR</span></div><p style="font-size:0.8rem;color:var(--text-dim)">${r.error}</p></div>`;
+  }
+
+  const vis = r.visible;
+  const rankLabel = rank !== undefined ? `#${rank + 1} · ` : '';
+
+  return `
+    <div class="result-card ${vis ? 'visible' : 'blocked'}">
+      <div class="result-name">
+        ${r.name}
+        <span class="badge ${vis ? 'badge-visible' : 'badge-blocked'}">${vis ? 'Visible' : 'Blocked'}</span>
+      </div>
+      <div class="result-stats">
+        <div class="stat">
+          <div class="stat-label">Clearance</div>
+          <div class="stat-value ${r.margin >= 0 ? 'positive' : 'negative'}">${r.margin >= 0 ? '+' : ''}${r.margin.toFixed(1)}°</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Sun altitude</div>
+          <div class="stat-value">${r.sunAlt.toFixed(1)}°</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Horizon at sun</div>
+          <div class="stat-value">${r.horizonAtSun.toFixed(1)}°</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Ground elev</div>
+          <div class="stat-value">${r.groundElev} m</div>
+        </div>
+      </div>
+      <div class="horizon-chart"><canvas id="chart-${r.id}"></canvas></div>
+      <div style="font-size:0.68rem;color:var(--text-dim);margin-top:0.35rem;font-family:JetBrains Mono,monospace">
+        ${rankLabel}${r.lat.toFixed(4)}°N, ${Math.abs(r.lon).toFixed(4)}°${r.lon >= 0 ? 'E' : 'W'} · Sun az ${r.sunAz.toFixed(0)}° · h=${r.height}m
+        ${!r.inPath ? ' · ⚠ may be outside totality' : ''}
+      </div>
+    </div>`;
+}
+
+
+// =========================================================================
+//  HORIZON CHART (canvas)
+// =========================================================================
+function drawHorizonChart(r) {
+  const canvas = document.getElementById(`chart-${r.id}`);
+  if (!canvas) return;
+
+  const rect = canvas.parentElement.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = rect.height + 'px';
+
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const W = rect.width, H = rect.height;
+
+  // Data bounds
+  const azMin = r.azimuths[0], azMax = r.azimuths[r.azimuths.length - 1];
+  const angMax = Math.max(r.sunAlt + 3, Math.max(...r.angles) + 2);
+  const angMin = Math.min(-1, Math.min(...r.angles) - 1);
+
+  const toX = az => (az - azMin) / (azMax - azMin) * W;
+  const toY = ang => H - (ang - angMin) / (angMax - angMin) * H;
+
+  // Background
+  ctx.fillStyle = '#111827';
+  ctx.fillRect(0, 0, W, H);
+
+  // Grid lines
+  ctx.strokeStyle = 'rgba(42,53,80,0.5)';
+  ctx.lineWidth = 0.5;
+  for (let a = Math.ceil(angMin); a <= angMax; a += 2) {
+    const y = toY(a);
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+
+  // Zero line
+  const y0 = toY(0);
+  ctx.strokeStyle = 'rgba(90,107,136,0.5)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, y0); ctx.lineTo(W, y0); ctx.stroke();
+
+  // Terrain fill
+  ctx.beginPath();
+  ctx.moveTo(toX(r.azimuths[0]), H);
+  for (let i = 0; i < r.azimuths.length; i++) {
+    ctx.lineTo(toX(r.azimuths[i]), toY(r.angles[i]));
+  }
+  ctx.lineTo(toX(r.azimuths[r.azimuths.length - 1]), H);
+  ctx.closePath();
+  const grad = ctx.createLinearGradient(0, toY(angMax), 0, H);
+  grad.addColorStop(0, 'rgba(139,92,45,0.5)');
+  grad.addColorStop(1, 'rgba(80,50,20,0.15)');
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Terrain line
+  ctx.beginPath();
+  for (let i = 0; i < r.azimuths.length; i++) {
+    const x = toX(r.azimuths[i]), y = toY(r.angles[i]);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.strokeStyle = '#a0724a';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Sun altitude line
+  const ySun = toY(r.sunAlt);
+  ctx.setLineDash([6, 4]);
+  ctx.strokeStyle = '#f5c542';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(0, ySun); ctx.lineTo(W, ySun); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Sun position dot
+  const xSun = toX(r.sunAz);
+  ctx.beginPath();
+  ctx.arc(xSun, ySun, 5, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffd866';
+  ctx.fill();
+  ctx.strokeStyle = '#c49a2a';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Labels
+  ctx.fillStyle = '#8899b4';
+  ctx.font = '9px "DM Sans", sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(`${azMin.toFixed(0)}°`, 3, H - 3);
+  ctx.textAlign = 'right';
+  ctx.fillText(`${azMax.toFixed(0)}°`, W - 3, H - 3);
+  ctx.textAlign = 'center';
+  ctx.fillText(`Sun ${r.sunAlt.toFixed(1)}°`, xSun, ySun - 10);
+
+  // Margin annotation
+  const marginX = xSun + 30;
+  const closestIdx = r.azimuths.reduce((best, az, i) =>
+    Math.abs(az - r.sunAz) < Math.abs(r.azimuths[best] - r.sunAz) ? i : best, 0);
+  const yTerrain = toY(r.angles[closestIdx]);
+
+  if (Math.abs(ySun - yTerrain) > 8) {
+    ctx.setLineDash([2, 2]);
+    ctx.strokeStyle = r.visible ? '#48d89b' : '#f05454';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(xSun, ySun); ctx.lineTo(xSun, yTerrain); ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = r.visible ? '#48d89b' : '#f05454';
+    ctx.font = 'bold 10px "JetBrains Mono", monospace';
+    const marginLabel = `${r.margin >= 0 ? '+' : ''}${r.margin.toFixed(1)}°`;
+    ctx.fillText(marginLabel, xSun, (ySun + yTerrain) / 2 + 3);
+  }
+}
+
+
+// =========================================================================
+//  TAB SWITCHING
+// =========================================================================
+function switchTab(tabName) {
+  document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tabName));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `tab-${tabName}`));
+}
+
+
+// =========================================================================
+//  INITIALIZATION
+// =========================================================================
+window.addEventListener('resize', () => {
+  for (const r of results) {
+    if (r.azimuths) drawHorizonChart(r);
+  }
+});
+
+// Prefill with example if URL has params
+const urlParams = new URLSearchParams(window.location.search);
+if (urlParams.has('lat') && urlParams.has('lon')) {
+  document.getElementById('inputLat').value = urlParams.get('lat');
+  document.getElementById('inputLon').value = urlParams.get('lon');
+  if (urlParams.has('name')) document.getElementById('inputName').value = urlParams.get('name');
+  if (urlParams.has('h')) document.getElementById('inputHeight').value = urlParams.get('h');
+}
+</script>
+</body>
+</html>
