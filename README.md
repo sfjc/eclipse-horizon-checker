@@ -6,7 +6,7 @@ On **12 August 2026**, a total solar eclipse crosses northern Spain near sunset.
 
 This tool uses satellite elevation data (SRTM, ~30 m resolution) to compute the terrain horizon from any candidate observation point and tells you whether the eclipsed sun will be visible or blocked.
 
-> **[→ Launch the web app](https://yourusername.github.io/eclipse-horizon-checker/)** *(replace with your GitHub Pages URL)*
+> **[→ Launch the web app](https://sfjc.github.io/eclipse-horizon-checker/)** *(replace with your GitHub Pages URL)*
 
 ![Screenshot](screenshot.png)
 
