@@ -11,7 +11,7 @@ solar eclipse to tell you whether the sun will be blocked by terrain.
 
 SETUP (one-time)
 ----------------
-    pip install numpy matplotlib requests
+    uv sync
 
 SRTM DATA
 ----------
@@ -66,19 +66,16 @@ ECLIPSE PARAMETERS (Palencia area)
 Author: Generated for eclipse planning near Grijota, Palencia, Spain.
 """
 
-import struct
 import math
-import os
-import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, cast
 
 import numpy as np
 
 # ---------------------------------------------------------------------------
 # Configuration — Eclipse parameters for the Palencia area
 # ---------------------------------------------------------------------------
-ECLIPSE = {
+ECLIPSE: dict[str, float | str] = {
     "sun_azimuth_deg": 280.0,       # degrees from north, clockwise
     "sun_altitude_deg": 9.0,        # degrees above horizon at max eclipse
     "azimuth_tolerance_deg": 15.0,  # half-width of azimuth band to check
@@ -121,7 +118,8 @@ def download_tile(lat: int, lon: int, cache_dir: Path = CACHE_DIR) -> Path:
 
     Returns the path to the local .hgt file, or raises FileNotFoundError.
     """
-    import requests, gzip, io
+    import requests
+    import gzip
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     fname = tile_filename(lat, lon)
@@ -193,7 +191,7 @@ class SrtmElevationModel:
 
     def __init__(self, cache_dir: Path = CACHE_DIR):
         self.cache_dir = cache_dir
-        self._tiles: dict[tuple[int, int], np.ndarray] = {}
+        self._tiles: dict[tuple[int, int], np.ndarray | None] = {}
 
     def _ensure_tile(self, lat_floor: int, lon_floor: int) -> Optional[np.ndarray]:
         key = (lat_floor, lon_floor)
@@ -381,9 +379,9 @@ def compute_horizon_profile(dem: SrtmElevationModel,
 def check_eclipse_visibility(dem: SrtmElevationModel,
                              lat: float, lon: float,
                              observer_height_m: float = 2.0,
-                             sun_az: float = ECLIPSE["sun_azimuth_deg"],
-                             sun_alt: float = ECLIPSE["sun_altitude_deg"],
-                             half_width: float = ECLIPSE["azimuth_tolerance_deg"],
+                             sun_az: float = cast(float, ECLIPSE["sun_azimuth_deg"]),
+                             sun_alt: float = cast(float, ECLIPSE["sun_altitude_deg"]),
+                             half_width: float = cast(float, ECLIPSE["azimuth_tolerance_deg"]),
                              ) -> dict:
     """
     Check whether the eclipse sun will be visible from a candidate site.
@@ -488,9 +486,13 @@ class EclipseHorizonChecker:
               f"{result['worst_horizon_in_band_deg']:.2f}° "
               f"at azimuth {result['worst_horizon_azimuth_deg']:.1f}°")
 
+        az_full: np.ndarray | None
+        ang_full: np.ndarray | None
+        dist_full: np.ndarray | None
+
         # Full 360° profile
         if full_profile:
-            print(f"\n  Computing full 360° horizon profile …")
+            print("\n  Computing full 360° horizon profile …")
             az_full, ang_full, dist_full = compute_horizon_profile(
                 self.dem, lat, lon, observer_height,
                 azimuth_start=0, azimuth_end=360, azimuth_step=1.0)
@@ -533,7 +535,7 @@ class EclipseHorizonChecker:
 
         # Right panel: full 360° horizon (if computed)
         ax2 = axes[1]
-        if az_full is not None:
+        if az_full is not None and ang_full is not None and dist_full is not None:
             ax2.fill_between(az_full, 0, ang_full, alpha=0.3, color="saddlebrown")
             ax2.plot(az_full, ang_full, "saddlebrown", linewidth=1.5,
                      label="Terrain horizon")
@@ -604,7 +606,7 @@ class EclipseHorizonChecker:
 
         # Summary table
         print(f"\n{'='*75}")
-        print(f" SITE COMPARISON — ranked by eclipse sun clearance")
+        print(" SITE COMPARISON — ranked by eclipse sun clearance")
         print(f"{'='*75}")
         print(f" {'Rank':<5} {'Site':<30} {'Elev':>6} {'Horizon':>8} "
               f"{'Margin':>8} {'Visible':>8}")
@@ -644,7 +646,7 @@ class EclipseHorizonChecker:
 
         if save_plot:
             fig.savefig("eclipse_site_comparison.png", dpi=150, bbox_inches="tight")
-            print(f"  📊 Comparison plot saved: eclipse_site_comparison.png")
+            print("  📊 Comparison plot saved: eclipse_site_comparison.png")
         plt.close(fig)
 
         return results
@@ -661,6 +663,8 @@ def main():
     print("║  ECLIPSE HORIZON CHECKER — 12 August 2026, Palencia, Spain ║")
     print("║  Sun at ~280° azimuth (WNW), ~9° altitude at totality      ║")
     print("╚══════════════════════════════════════════════════════════════╝")
+
+
 
     checker = EclipseHorizonChecker()
 
