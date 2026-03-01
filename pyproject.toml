@@ -1,0 +1,19 @@
+[project]
+name = "eclipse-horizon-checker"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+  "numpy==2.*",
+  "matplotlib==3.*",
+  "requests==2.*"
+]
+
+[dependency-groups]
+dev = [
+  "pytest==8.*",
+  "mypy==1.*",
+  "ruff==0.*",
+  "types-requests==2.*"
+]
