@@ -1,0 +1,8 @@
+
+# Generated / caches
+canopy_spain.png
+canopy_spain.json
+__pycache__/
+*.pyc
+.mypy_cache/
+*.egg-info/

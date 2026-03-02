@@ -11,7 +11,7 @@ solar eclipse to tell you whether the sun will be blocked by terrain.
 
 SETUP (one-time)
 ----------------
-    uv sync
+    pip install numpy matplotlib requests
 
 SRTM DATA
 ----------
@@ -75,9 +75,9 @@ import numpy as np
 # ---------------------------------------------------------------------------
 # Configuration — Eclipse parameters for the Palencia area
 # ---------------------------------------------------------------------------
-ECLIPSE: dict[str, float | str] = {
-    "sun_azimuth_deg": 280.0,       # degrees from north, clockwise
-    "sun_altitude_deg": 9.0,        # degrees above horizon at max eclipse
+ECLIPSE = {
+    "sun_azimuth_deg": 280.0,  # degrees from north, clockwise
+    "sun_altitude_deg": 9.0,  # degrees above horizon at max eclipse
     "azimuth_tolerance_deg": 15.0,  # half-width of azimuth band to check
     "date": "2026-08-12",
     "time_local": "20:30 CEST",
@@ -100,6 +100,7 @@ CACHE_DIR = Path("srtm_cache")
 # ---------------------------------------------------------------------------
 # SRTM tile I/O
 # ---------------------------------------------------------------------------
+
 
 def tile_filename(lat: int, lon: int) -> str:
     """Return the standard HGT filename for a 1°×1° tile."""
@@ -216,8 +217,8 @@ class SrtmElevationModel:
         n = side - 1  # 3600 for SRTM1
 
         # Fractional position within tile (note: rows go top-to-bottom = N-to-S)
-        y_frac = (lat - lat_floor)        # 0 at southern edge, 1 at northern edge
-        x_frac = (lon - lon_floor)        # 0 at western edge,  1 at eastern edge
+        y_frac = lat - lat_floor  # 0 at southern edge, 1 at northern edge
+        x_frac = lon - lon_floor  # 0 at western edge,  1 at eastern edge
 
         # Pixel coordinates (row 0 = northern edge)
         row = (1.0 - y_frac) * n
@@ -241,14 +242,17 @@ class SrtmElevationModel:
             return 0.0
 
         # Bilinear interpolation
-        elev = (z00 * (1 - dr) * (1 - dc) +
-                z01 * (1 - dr) * dc +
-                z10 * dr * (1 - dc) +
-                z11 * dr * dc)
+        elev = (
+            z00 * (1 - dr) * (1 - dc)
+            + z01 * (1 - dr) * dc
+            + z10 * dr * (1 - dc)
+            + z11 * dr * dc
+        )
         return elev
 
-    def preload_region(self, lat_min: float, lat_max: float,
-                       lon_min: float, lon_max: float):
+    def preload_region(
+        self, lat_min: float, lat_max: float, lon_min: float, lon_max: float
+    ):
         """Pre-download all tiles covering a bounding box."""
         for lat in range(math.floor(lat_min), math.floor(lat_max) + 1):
             for lon in range(math.floor(lon_min), math.floor(lon_max) + 1):
@@ -259,8 +263,10 @@ class SrtmElevationModel:
 # Horizon computation
 # ---------------------------------------------------------------------------
 
-def destination_point(lat: float, lon: float, azimuth_deg: float,
-                      distance_m: float) -> tuple[float, float]:
+
+def destination_point(
+    lat: float, lon: float, azimuth_deg: float, distance_m: float
+) -> tuple[float, float]:
     """
     Given a starting point, azimuth and distance, return the destination
     point on a sphere (Vincenty direct formula, spherical).
@@ -270,20 +276,26 @@ def destination_point(lat: float, lon: float, azimuth_deg: float,
     θ = math.radians(azimuth_deg)
     δ = distance_m / EARTH_RADIUS_M  # angular distance
 
-    φ2 = math.asin(math.sin(φ1) * math.cos(δ) +
-                    math.cos(φ1) * math.sin(δ) * math.cos(θ))
-    λ2 = λ1 + math.atan2(math.sin(θ) * math.sin(δ) * math.cos(φ1),
-                          math.cos(δ) - math.sin(φ1) * math.sin(φ2))
+    φ2 = math.asin(
+        math.sin(φ1) * math.cos(δ) + math.cos(φ1) * math.sin(δ) * math.cos(θ)
+    )
+    λ2 = λ1 + math.atan2(
+        math.sin(θ) * math.sin(δ) * math.cos(φ1),
+        math.cos(δ) - math.sin(φ1) * math.sin(φ2),
+    )
 
     return math.degrees(φ2), math.degrees(λ2)
 
 
-def compute_horizon_angle(dem: SrtmElevationModel,
-                          lat: float, lon: float,
-                          azimuth_deg: float,
-                          observer_height_m: float = 2.0,
-                          max_distance_m: float = MAX_RAY_DISTANCE_M,
-                          step_m: float = RAY_STEP_M) -> tuple[float, float]:
+def compute_horizon_angle(
+    dem: SrtmElevationModel,
+    lat: float,
+    lon: float,
+    azimuth_deg: float,
+    observer_height_m: float = 2.0,
+    max_distance_m: float = MAX_RAY_DISTANCE_M,
+    step_m: float = RAY_STEP_M,
+) -> tuple[float, float]:
     """
     Trace a ray from (lat, lon) at the given azimuth and return the
     maximum terrain elevation angle (the horizon angle) and the distance
@@ -338,14 +350,16 @@ def compute_horizon_angle(dem: SrtmElevationModel,
     return max_angle, max_dist
 
 
-def compute_horizon_profile(dem: SrtmElevationModel,
-                            lat: float, lon: float,
-                            observer_height_m: float = 2.0,
-                            azimuth_start: float = 0.0,
-                            azimuth_end: float = 360.0,
-                            azimuth_step: float = 1.0,
-                            max_distance_m: float = MAX_RAY_DISTANCE_M,
-                            ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def compute_horizon_profile(
+    dem: SrtmElevationModel,
+    lat: float,
+    lon: float,
+    observer_height_m: float = 2.0,
+    azimuth_start: float = 0.0,
+    azimuth_end: float = 360.0,
+    azimuth_step: float = 1.0,
+    max_distance_m: float = MAX_RAY_DISTANCE_M,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Compute the full horizon profile around an observer.
 
@@ -362,9 +376,12 @@ def compute_horizon_profile(dem: SrtmElevationModel,
     total = len(azimuths)
     for i, az in enumerate(azimuths):
         if i % 30 == 0:
-            print(f"\r  Computing horizon: {i}/{total} ({az:.0f}°) …", end="", flush=True)
+            print(
+                f"\r  Computing horizon: {i}/{total} ({az:.0f}°) …", end="", flush=True
+            )
         angle, dist = compute_horizon_angle(
-            dem, lat, lon, az, observer_height_m, max_distance_m)
+            dem, lat, lon, az, observer_height_m, max_distance_m
+        )
         horizon_angles[i] = angle
         horizon_distances[i] = dist
     print(f"\r  Computing horizon: {total}/{total} — done.           ")
@@ -376,13 +393,16 @@ def compute_horizon_profile(dem: SrtmElevationModel,
 # Eclipse-specific analysis
 # ---------------------------------------------------------------------------
 
-def check_eclipse_visibility(dem: SrtmElevationModel,
-                             lat: float, lon: float,
-                             observer_height_m: float = 2.0,
-                             sun_az: float = cast(float, ECLIPSE["sun_azimuth_deg"]),
-                             sun_alt: float = cast(float, ECLIPSE["sun_altitude_deg"]),
-                             half_width: float = cast(float, ECLIPSE["azimuth_tolerance_deg"]),
-                             ) -> dict:
+
+def check_eclipse_visibility(
+    dem: SrtmElevationModel,
+    lat: float,
+    lon: float,
+    observer_height_m: float = 2.0,
+    sun_az: float = cast(float, ECLIPSE["sun_azimuth_deg"]),
+    sun_alt: float = cast(float, ECLIPSE["sun_altitude_deg"]),
+    half_width: float = cast(float, ECLIPSE["azimuth_tolerance_deg"]),
+) -> dict:
     """
     Check whether the eclipse sun will be visible from a candidate site.
 
@@ -399,8 +419,13 @@ def check_eclipse_visibility(dem: SrtmElevationModel,
     az_max = sun_az + half_width
 
     azimuths, angles, dists = compute_horizon_profile(
-        dem, lat, lon, observer_height_m,
-        azimuth_start=az_min, azimuth_end=az_max, azimuth_step=0.5,
+        dem,
+        lat,
+        lon,
+        observer_height_m,
+        azimuth_start=az_min,
+        azimuth_end=az_max,
+        azimuth_step=0.5,
         max_distance_m=MAX_RAY_DISTANCE_M,
     )
 
@@ -434,6 +459,7 @@ def check_eclipse_visibility(dem: SrtmElevationModel,
 # High-level analysis & plotting
 # ---------------------------------------------------------------------------
 
+
 class EclipseHorizonChecker:
     """
     Convenient wrapper for eclipse visibility analysis.
@@ -442,21 +468,27 @@ class EclipseHorizonChecker:
     def __init__(self, cache_dir: str | Path = CACHE_DIR):
         self.dem = SrtmElevationModel(Path(cache_dir))
 
-    def analyze_site(self, name: str, lat: float, lon: float,
-                     observer_height: float = 2.0,
-                     full_profile: bool = True,
-                     save_plot: bool = True) -> dict:
+    def analyze_site(
+        self,
+        name: str,
+        lat: float,
+        lon: float,
+        observer_height: float = 2.0,
+        full_profile: bool = True,
+        save_plot: bool = True,
+    ) -> dict:
         """
         Run a complete eclipse visibility analysis for one site.
         Prints a report and optionally saves plots.
         """
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
-        print(f"\n{'='*65}")
+        print(f"\n{'=' * 65}")
         print(f" ECLIPSE VISIBILITY ANALYSIS: {name}")
-        print(f"{'='*65}")
+        print(f"{'=' * 65}")
 
         ground_elev = self.dem.get_elevation(lat, lon)
         print(f"  Location:  {lat:.5f}°N, {abs(lon):.5f}°W")
@@ -466,91 +498,142 @@ class EclipseHorizonChecker:
         print()
 
         # Eclipse-band analysis
-        result = check_eclipse_visibility(
-            self.dem, lat, lon, observer_height)
+        result = check_eclipse_visibility(self.dem, lat, lon, observer_height)
 
-        print(f"  Sun at eclipse:  az={result['sun_azimuth_deg']:.1f}°  "
-              f"alt={result['sun_altitude_deg']:.1f}°")
-        print(f"  Terrain horizon at sun azimuth: "
-              f"{result['horizon_at_sun_az_deg']:.2f}°")
+        print(
+            f"  Sun at eclipse:  az={result['sun_azimuth_deg']:.1f}°  "
+            f"alt={result['sun_altitude_deg']:.1f}°"
+        )
+        print(
+            f"  Terrain horizon at sun azimuth: {result['horizon_at_sun_az_deg']:.2f}°"
+        )
         print(f"  Clearance margin: {result['margin_deg']:.2f}°")
 
         if result["visible"]:
-            print(f"\n  ✅  SUN IS VISIBLE — {result['margin_deg']:.1f}° "
-                  f"of clearance above terrain.")
+            print(
+                f"\n  ✅  SUN IS VISIBLE — {result['margin_deg']:.1f}° "
+                f"of clearance above terrain."
+            )
         else:
-            print(f"\n  ❌  SUN IS BLOCKED — terrain is "
-                  f"{abs(result['margin_deg']):.1f}° above the sun's position.")
+            print(
+                f"\n  ❌  SUN IS BLOCKED — terrain is "
+                f"{abs(result['margin_deg']):.1f}° above the sun's position."
+            )
 
-        print(f"\n  Worst horizon in ±{ECLIPSE['azimuth_tolerance_deg']:.0f}° band: "
-              f"{result['worst_horizon_in_band_deg']:.2f}° "
-              f"at azimuth {result['worst_horizon_azimuth_deg']:.1f}°")
-
-        az_full: np.ndarray | None
-        ang_full: np.ndarray | None
-        dist_full: np.ndarray | None
+        print(
+            f"\n  Worst horizon in ±{ECLIPSE['azimuth_tolerance_deg']:.0f}° band: "
+            f"{result['worst_horizon_in_band_deg']:.2f}° "
+            f"at azimuth {result['worst_horizon_azimuth_deg']:.1f}°"
+        )
 
         # Full 360° profile
         if full_profile:
             print("\n  Computing full 360° horizon profile …")
             az_full, ang_full, dist_full = compute_horizon_profile(
-                self.dem, lat, lon, observer_height,
-                azimuth_start=0, azimuth_end=360, azimuth_step=1.0)
+                self.dem,
+                lat,
+                lon,
+                observer_height,
+                azimuth_start=0,
+                azimuth_end=360,
+                azimuth_step=1.0,
+            )
         else:
-            az_full = ang_full = dist_full = None
+            az_full = ang_full = dist_full = None  # type: ignore[assignment]
 
         # --- Plotting ---
         fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-        fig.suptitle(f"Eclipse Horizon Analysis: {name}\n"
-                     f"({lat:.4f}°N, {abs(lon):.4f}°W, "
-                     f"ground elev {ground_elev:.0f} m)",
-                     fontsize=13, fontweight="bold")
+        fig.suptitle(
+            f"Eclipse Horizon Analysis: {name}\n"
+            f"({lat:.4f}°N, {abs(lon):.4f}°W, "
+            f"ground elev {ground_elev:.0f} m)",
+            fontsize=13,
+            fontweight="bold",
+        )
 
         # Left panel: eclipse azimuth band detail
         ax = axes[0]
         az_band = result["profile_azimuths"]
         ang_band = result["profile_angles"]
 
-        ax.fill_between(az_band, 0, ang_band, alpha=0.3, color="saddlebrown",
-                        label="Terrain horizon")
+        ax.fill_between(
+            az_band,
+            0,
+            ang_band,
+            alpha=0.3,
+            color="saddlebrown",
+            label="Terrain horizon",
+        )
         ax.plot(az_band, ang_band, "saddlebrown", linewidth=2)
-        ax.axhline(result["sun_altitude_deg"], color="gold", linewidth=2,
-                   linestyle="--", label=f"Sun altitude ({result['sun_altitude_deg']:.1f}°)")
-        ax.axvline(result["sun_azimuth_deg"], color="orange", linewidth=1,
-                   linestyle=":", alpha=0.7, label=f"Sun azimuth ({result['sun_azimuth_deg']:.0f}°)")
+        ax.axhline(
+            result["sun_altitude_deg"],
+            color="gold",
+            linewidth=2,
+            linestyle="--",
+            label=f"Sun altitude ({result['sun_altitude_deg']:.1f}°)",
+        )
+        ax.axvline(
+            result["sun_azimuth_deg"],
+            color="orange",
+            linewidth=1,
+            linestyle=":",
+            alpha=0.7,
+            label=f"Sun azimuth ({result['sun_azimuth_deg']:.0f}°)",
+        )
         ax.set_xlabel("Azimuth (°)")
         ax.set_ylabel("Elevation angle (°)")
         ax.set_title("Eclipse azimuth band (detail)")
         ax.legend(fontsize=9)
-        ax.set_ylim(bottom=min(-1, ang_band.min() - 1),
-                    top=max(12, ang_band.max() + 2))
+        ax.set_ylim(bottom=min(-1, ang_band.min() - 1), top=max(12, ang_band.max() + 2))
         ax.grid(True, alpha=0.3)
 
         # Shade the clearance zone
         for az_val, ang_val in zip(az_band, ang_band):
             if ang_val < result["sun_altitude_deg"]:
-                ax.fill_between([az_val - 0.25, az_val + 0.25],
-                                ang_val, result["sun_altitude_deg"],
-                                color="lightgreen", alpha=0.02)
+                ax.fill_between(
+                    [az_val - 0.25, az_val + 0.25],
+                    ang_val,
+                    result["sun_altitude_deg"],
+                    color="lightgreen",
+                    alpha=0.02,
+                )
 
         # Right panel: full 360° horizon (if computed)
         ax2 = axes[1]
-        if az_full is not None and ang_full is not None and dist_full is not None:
+        if az_full is not None:
             ax2.fill_between(az_full, 0, ang_full, alpha=0.3, color="saddlebrown")
-            ax2.plot(az_full, ang_full, "saddlebrown", linewidth=1.5,
-                     label="Terrain horizon")
-            ax2.axhline(result["sun_altitude_deg"], color="gold", linewidth=2,
-                        linestyle="--", label=f"Sun altitude ({result['sun_altitude_deg']:.1f}°)")
+            ax2.plot(
+                az_full, ang_full, "saddlebrown", linewidth=1.5, label="Terrain horizon"
+            )
+            ax2.axhline(
+                result["sun_altitude_deg"],
+                color="gold",
+                linewidth=2,
+                linestyle="--",
+                label=f"Sun altitude ({result['sun_altitude_deg']:.1f}°)",
+            )
 
             # Mark sun position
-            ax2.plot(result["sun_azimuth_deg"], result["sun_altitude_deg"],
-                     "o", color="gold", markersize=14, markeredgecolor="darkorange",
-                     markeredgewidth=2, label="Sun at eclipse", zorder=5)
+            ax2.plot(
+                result["sun_azimuth_deg"],
+                result["sun_altitude_deg"],
+                "o",
+                color="gold",
+                markersize=14,
+                markeredgecolor="darkorange",
+                markeredgewidth=2,
+                label="Sun at eclipse",
+                zorder=5,
+            )
 
             # Shade eclipse band
-            ax2.axvspan(result["sun_azimuth_deg"] - ECLIPSE["azimuth_tolerance_deg"],
-                        result["sun_azimuth_deg"] + ECLIPSE["azimuth_tolerance_deg"],
-                        alpha=0.1, color="orange", label="Eclipse azimuth band")
+            ax2.axvspan(
+                result["sun_azimuth_deg"] - ECLIPSE["azimuth_tolerance_deg"],
+                result["sun_azimuth_deg"] + ECLIPSE["azimuth_tolerance_deg"],
+                alpha=0.1,
+                color="orange",
+                label="Eclipse azimuth band",
+            )
 
             ax2.set_xlabel("Azimuth (°)  [N=0, E=90, S=180, W=270]")
             ax2.set_ylabel("Elevation angle (°)")
@@ -558,13 +641,20 @@ class EclipseHorizonChecker:
             ax2.set_xlim(0, 360)
             ax2.set_xticks(range(0, 361, 45))
             ax2.set_xticklabels(["N", "NE", "E", "SE", "S", "SW", "W", "NW", "N"])
-            ax2.set_ylim(bottom=min(-2, ang_full.min() - 1),
-                         top=max(15, ang_full.max() + 2))
+            ax2.set_ylim(
+                bottom=min(-2, ang_full.min() - 1), top=max(15, ang_full.max() + 2)
+            )
             ax2.legend(fontsize=9, loc="upper left")
             ax2.grid(True, alpha=0.3)
         else:
-            ax2.text(0.5, 0.5, "(full_profile=False;\n 360° plot skipped)",
-                     ha="center", va="center", transform=ax2.transAxes)
+            ax2.text(
+                0.5,
+                0.5,
+                "(full_profile=False;\n 360° plot skipped)",
+                ha="center",
+                va="center",
+                transform=ax2.transAxes,
+            )
 
         plt.tight_layout()
         if save_plot:
@@ -578,9 +668,12 @@ class EclipseHorizonChecker:
         result["name"] = name
         return result
 
-    def compare_sites(self, sites: dict[str, tuple[float, float]],
-                      observer_height: float = 2.0,
-                      save_plot: bool = True) -> list[dict]:
+    def compare_sites(
+        self,
+        sites: dict[str, tuple[float, float]],
+        observer_height: float = 2.0,
+        save_plot: bool = True,
+    ) -> list[dict]:
         """
         Analyze and compare multiple candidate sites.
 
@@ -592,32 +685,38 @@ class EclipseHorizonChecker:
         Returns sorted list of result dicts (best first).
         """
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
         results = []
         for name, (lat, lon) in sites.items():
-            r = self.analyze_site(name, lat, lon, observer_height,
-                                  full_profile=False, save_plot=False)
+            r = self.analyze_site(
+                name, lat, lon, observer_height, full_profile=False, save_plot=False
+            )
             results.append(r)
 
         # Sort by margin (best = most clearance)
         results.sort(key=lambda r: r["margin_deg"], reverse=True)
 
         # Summary table
-        print(f"\n{'='*75}")
+        print(f"\n{'=' * 75}")
         print(" SITE COMPARISON — ranked by eclipse sun clearance")
-        print(f"{'='*75}")
-        print(f" {'Rank':<5} {'Site':<30} {'Elev':>6} {'Horizon':>8} "
-              f"{'Margin':>8} {'Visible':>8}")
+        print(f"{'=' * 75}")
+        print(
+            f" {'Rank':<5} {'Site':<30} {'Elev':>6} {'Horizon':>8} "
+            f"{'Margin':>8} {'Visible':>8}"
+        )
         print(f" {'':5} {'':30} {'(m)':>6} {'(°)':>8} {'(°)':>8} {'':>8}")
-        print(f" {'-'*5} {'-'*30} {'-'*6} {'-'*8} {'-'*8} {'-'*8}")
+        print(f" {'-' * 5} {'-' * 30} {'-' * 6} {'-' * 8} {'-' * 8} {'-' * 8}")
 
         for i, r in enumerate(results, 1):
             vis = "✅ YES" if r["visible"] else "❌ NO"
-            print(f" {i:<5} {r['name']:<30} {r['ground_elevation_m']:>6.0f} "
-                  f"{r['horizon_at_sun_az_deg']:>8.2f} "
-                  f"{r['margin_deg']:>+8.2f} {vis:>8}")
+            print(
+                f" {i:<5} {r['name']:<30} {r['ground_elevation_m']:>6.0f} "
+                f"{r['horizon_at_sun_az_deg']:>8.2f} "
+                f"{r['margin_deg']:>+8.2f} {vis:>8}"
+            )
         print()
 
         # Comparison bar chart
@@ -629,17 +728,25 @@ class EclipseHorizonChecker:
         bars = ax.barh(names, margins, color=colors, edgecolor="black", linewidth=0.5)
         ax.axvline(0, color="black", linewidth=1)
         ax.set_xlabel("Clearance margin (degrees above terrain horizon)")
-        ax.set_title("Eclipse Sun Visibility Comparison\n"
-                     f"Sun at {ECLIPSE['sun_azimuth_deg']:.0f}° azimuth, "
-                     f"{ECLIPSE['sun_altitude_deg']:.0f}° altitude")
+        ax.set_title(
+            "Eclipse Sun Visibility Comparison\n"
+            f"Sun at {ECLIPSE['sun_azimuth_deg']:.0f}° azimuth, "
+            f"{ECLIPSE['sun_altitude_deg']:.0f}° altitude"
+        )
         ax.invert_yaxis()
 
         for bar, margin in zip(bars, margins):
             x_pos = margin + (0.1 if margin >= 0 else -0.1)
             ha = "left" if margin >= 0 else "right"
-            ax.text(x_pos, bar.get_y() + bar.get_height() / 2,
-                    f"{margin:+.1f}°", va="center", ha=ha, fontsize=10,
-                    fontweight="bold")
+            ax.text(
+                x_pos,
+                bar.get_y() + bar.get_height() / 2,
+                f"{margin:+.1f}°",
+                va="center",
+                ha=ha,
+                fontsize=10,
+                fontweight="bold",
+            )
 
         ax.grid(True, axis="x", alpha=0.3)
         plt.tight_layout()
@@ -656,6 +763,7 @@ class EclipseHorizonChecker:
 # CLI entry point
 # ---------------------------------------------------------------------------
 
+
 def main():
     """Run the analysis for the five candidate sites near Grijota."""
 
@@ -664,22 +772,21 @@ def main():
     print("║  Sun at ~280° azimuth (WNW), ~9° altitude at totality      ║")
     print("╚══════════════════════════════════════════════════════════════╝")
 
-
-
     checker = EclipseHorizonChecker()
 
     sites = {
-        "Castillo de Monzón de Campos":     (42.1245, -4.4983),
-        "Cristo del Otero (Palencia)":       (42.0230, -4.5195),
-        "Torremormojón (Estrella de Campos)":(41.8940, -4.6775),
-        "Castillo Fuentes de Valdepero":     (42.0795, -4.4575),
-        "Castillo de Ampudia":               (41.9170, -4.7815),
+        "Castillo de Monzón de Campos": (42.1245, -4.4983),
+        "Cristo del Otero (Palencia)": (42.0230, -4.5195),
+        "Torremormojón (Estrella de Campos)": (41.8940, -4.6775),
+        "Castillo Fuentes de Valdepero": (42.0795, -4.4575),
+        "Castillo de Ampudia": (41.9170, -4.7815),
     }
 
     # Individual analysis with full 360° profiles
     for name, (lat, lon) in sites.items():
-        checker.analyze_site(name, lat, lon, observer_height=2.0,
-                             full_profile=True, save_plot=True)
+        checker.analyze_site(
+            name, lat, lon, observer_height=2.0, full_profile=True, save_plot=True
+        )
 
     # Comparative summary
     checker.compare_sites(sites, observer_height=2.0, save_plot=True)

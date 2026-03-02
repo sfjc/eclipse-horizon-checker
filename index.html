@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Eclipse Horizon Checker — 12 August 2026</title>
-<meta name="description" content="Check whether terrain will block your view of the 2026 total solar eclipse from any location in Spain. Uses SRTM elevation data to compute horizon profiles.">
+<meta name="description" content="Check whether terrain or trees will block your view of the 2026 total solar eclipse from any location in Spain. Computes horizon profiles, totality duration, and tree canopy obstruction using SRTM and Meta/WRI data.">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
@@ -409,6 +409,13 @@
         <button class="btn-secondary" onclick="analyzeAllPins()" id="btnAnalyze" disabled>
           Analyze all pins
         </button>
+        <div style="margin-top:0.6rem;display:flex;align-items:center;gap:0.5rem">
+          <label style="font-size:0.75rem;color:var(--text-muted);cursor:pointer;display:flex;align-items:center;gap:0.35rem">
+            <input type="checkbox" id="canopyToggle" checked onchange="canopyEnabled=this.checked;updateCanopyStatus()" style="accent-color:var(--green)">
+            🌲 Tree canopy analysis
+          </label>
+          <span id="canopyStatus" style="font-size:0.65rem;color:var(--text-dim)"></span>
+        </div>
 
         <div id="pinList" style="margin-top:1rem">
           <div class="empty-state">
@@ -438,13 +445,21 @@
           <p>This tool uses satellite elevation data (SRTM, ~30 m resolution) to compute the terrain horizon from any candidate observation point, and tells you whether the eclipsed sun will be visible or blocked.</p>
         </div>
         <div class="help-section">
+          <h3>New in v0.2</h3>
+          <ul>
+            <li><strong>Totality duration</strong> — computed for each pin using NASA/Espenak path data (centerline coordinates, path width, and the standard duration formula).</li>
+            <li><strong>Tree canopy analysis</strong> (optional) — uses the Meta/WRI Global Canopy Height Map (1 m resolution, downsampled to 100 m for the web) to detect trees that might obstruct the low sun. Run <code>python prepare_canopy.py</code> to generate <code>canopy_spain.png</code> and <code>canopy_spain.json</code>, then place them alongside <code>index.html</code>. The indicator next to the checkbox shows whether the data is loaded.</li>
+          </ul>
+        </div>
+        <div class="help-section">
           <h3>How to use it</h3>
           <ul>
             <li><strong>Click the map</strong> to drop a pin at a candidate viewing location</li>
             <li>Or <strong>paste coordinates</strong> from Google Maps into the fields above</li>
             <li>Set the <strong>observer height</strong> — your eye height above ground. Use 2 m for flat ground, 5–10 m if standing on a castle wall or rooftop.</li>
+            <li>Optionally enable <strong>🌲 Tree canopy analysis</strong> to check for tree obstruction</li>
             <li>Click <strong>"Analyze all pins"</strong> to run the horizon computation</li>
-            <li>Results show the clearance margin: positive = sun visible, negative = blocked by terrain</li>
+            <li>Results show the clearance margin, totality duration, and tree warnings</li>
           </ul>
         </div>
         <div class="help-section">
@@ -461,10 +476,11 @@
         <div class="help-section">
           <h3>Accuracy notes</h3>
           <ul>
-            <li><strong>Elevation data</strong>: AWS Terrain Tiles (~30 m resolution, derived from SRTM). Adequate for landscape-scale terrain; individual buildings and trees are not resolved.</li>
+            <li><strong>Elevation data</strong>: AWS Terrain Tiles (~30 m resolution, derived from SRTM). Adequate for landscape-scale terrain; individual buildings are not resolved.</li>
             <li><strong>Earth curvature</strong>: Fully corrected, with standard atmospheric refraction (k=0.13).</li>
-            <li><strong>Trees/buildings</strong>: SRTM measures the canopy/roof surface, not bare earth. A forest 5 km away will appear as ~15–20 m of extra terrain. In flat cereal-farming regions (Tierra de Campos), this is rarely an issue.</li>
-            <li><strong>Ray tracing</strong>: Horizon is computed by tracing rays at 0.5° azimuth intervals across a ±20° band around the sun position, sampling elevation every ~40 m out to 40 km.</li>
+            <li><strong>Tree canopy</strong>: When loaded, uses Meta/WRI Global Canopy Height Map downsampled to ~100 m. The Python script uses the full 1 m resolution. Scans within 500 m of the observer. At 9° sun altitude, a 25 m tree blocks only within ~160 m.</li>
+            <li><strong>Duration</strong>: Interpolated from NASA/Espenak path table (120-second intervals). Accuracy ±2 seconds — use Xavier Jubier's maps for precise timing.</li>
+            <li><strong>Ray tracing</strong>: Horizon computed at 0.5° azimuth intervals across ±20° around the sun, sampling every ~40 m out to 40 km.</li>
           </ul>
         </div>
         <div class="help-section">
@@ -474,8 +490,9 @@
         <div class="credit">
           Eclipse path data: Fred Espenak, NASA/GSFC.<br>
           Elevation data: AWS Terrain Tiles (Mapzen/Tilezen), derived from SRTM/GMTED.<br>
+          Canopy height: Meta and World Resources Institute (WRI), 2024.<br>
           Map tiles: © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors.<br>
-          <a href="https://github.com">View source on GitHub</a>
+          <a href="https://github.com/sfjc/eclipse-horizon-checker">View source on GitHub</a>
         </div>
       </div>
 
@@ -492,66 +509,109 @@
 //  Covering the approach + Spain + Mediterranean.
 // =========================================================================
 const ECLIPSE_PATH = [
-  // UT_min, N_lat, N_lon, S_lat, S_lon, C_lat, C_lon, alt, az
-  [1104, 55+34.1/60, -(17+1.7/60), 55+4.7/60, -(22+1.5/60), 55+20.6/60, -(19+35.3/60), 23, 263],
-  [1106, 54+33.7/60, -(16+17.7/60), 54+7.1/60, -(21+16.5/60), 54+21.7/60, -(18+50.8/60), 22, 264],
-  [1108, 53+32.8/60, -(15+30.2/60), 53+9.1/60, -(20+29.1/60), 53+22.3/60, -(18+3.4/60), 22, 266],
-  [1110, 52+31.2/60, -(14+38.8/60), 52+10.6/60, -(19+38.8/60), 52+22.3/60, -(17+12.7/60), 21, 267],
-  [1112, 51+28.7/60, -(13+42.7/60), 51+11.6/60, -(18+45.3/60), 51+21.6/60, -(16+18.2/60), 20, 269],
-  [1114, 50+25.0/60, -(12+41.1/60), 50+11.7/60, -(17+47.9/60), 50+20.0/60, -(15+19.0/60), 19, 270],
-  [1116, 49+19.8/60, -(11+32.8/60), 49+10.9/60, -(16+45.9/60), 49+17.1/60, -(14+14.3/60), 18, 272],
-  [1118, 48+12.5/60, -(10+16.0/60), 48+8.8/60, -(15+38.3/60), 48+12.7/60, -(13+2.9/60), 17, 273],
-  [1120, 47+2.3/60, -(8+48.1/60), 47+5.0/60, -(14+23.8/60), 47+6.1/60, -(11+42.9/60), 16, 275],
-  [1122, 45+48.1/60, -(7+4.6/60), 45+59.0/60, -(13+0.5/60), 45+56.6/60, -(10+11.4/60), 14, 277],
-  [1124, 44+27.4/60, -(4+56.9/60), 44+49.9/60, -(11+25.2/60), 44+42.8/60, -(8+23.9/60), 13, 278],
-  [1126, 42+54.5/60, -(2+5.1/60), 43+36.4/60, -(9+33.1/60), 43+22.3/60, -(6+11.3/60), 10, 281],
-  [1128, 41+49.0/60, 3+11.1/60, 42+15.8/60, -(7+14.2/60), 41+49.0/60, -(3+11.1/60), 8, 283],
-  [1130, 40+39.9/60, 3+17.7/60, 40+41.0/60, -(4+2.4/60), 39+24.5/60, 2+57.0/60, 2, 288],
+  // [UT_min, N_lat, N_lon, S_lat, S_lon, C_lat, C_lon, alt, az, width_km, dur_sec]
+  [1064, 55+34.1/60, -(17+1.7/60), 55+4.7/60, -(22+1.5/60), 55+20.6/60, -(19+35.3/60), 23, 263, 313, 132.5],
+  [1066, 54+33.7/60, -(16+17.7/60), 54+7.1/60, -(21+16.5/60), 54+21.7/60, -(18+50.8/60), 22, 264, 315, 131.3],
+  [1068, 53+32.8/60, -(15+30.2/60), 53+9.1/60, -(20+29.1/60), 53+22.3/60, -(18+3.4/60), 22, 266, 316, 130.0],
+  [1070, 52+31.2/60, -(14+38.8/60), 52+10.6/60, -(19+38.8/60), 52+22.3/60, -(17+12.7/60), 21, 267, 318, 128.6],
+  [1072, 51+28.7/60, -(13+42.7/60), 51+11.6/60, -(18+45.3/60), 51+21.6/60, -(16+18.2/60), 20, 269, 319, 127.0],
+  [1074, 50+25.0/60, -(12+41.1/60), 50+11.7/60, -(17+47.9/60), 50+20.0/60, -(15+19.0/60), 19, 270, 319, 125.2],
+  [1076, 49+19.8/60, -(11+32.8/60), 49+10.9/60, -(16+45.9/60), 49+17.1/60, -(14+14.3/60), 18, 272, 319, 123.3],
+  [1078, 48+12.5/60, -(10+16.0/60), 48+8.8/60, -(15+38.3/60), 48+12.7/60, -(13+2.9/60), 17, 273, 319, 121.2],
+  [1080, 47+2.3/60, -(8+48.1/60), 47+5.0/60, -(14+23.8/60), 47+6.1/60, -(11+42.9/60), 16, 275, 318, 118.8],
+  [1082, 45+48.1/60, -(7+4.6/60), 45+59.0/60, -(13+0.5/60), 45+56.6/60, -(10+11.4/60), 14, 277, 315, 116.1],
+  [1084, 44+27.4/60, -(4+56.9/60), 44+49.9/60, -(11+25.2/60), 44+42.8/60, -(8+23.9/60), 13, 278, 311, 113.0],
+  [1086, 42+54.5/60, -(2+5.1/60), 43+36.4/60, -(9+33.1/60), 43+22.3/60, -(6+11.3/60), 10, 281, 304, 109.3],
+  [1088, 40+39.9/60, 3+17.7/60, 42+15.8/60, -(7+14.2/60), 41+49.0/60, -(3+11.1/60), 8, 283, 294, 104.6],
+  [1090, 39+42.5/60, 6+20.4/60, 40+41.0/60, -(4+2.4/60), 39+24.5/60, 2+57.0/60, 2, 288, 270, 95.8],
 ];
 
 // =========================================================================
-//  INTERPOLATE SUN POSITION for any observer location
+//  ECLIPSE CIRCUMSTANCES — sun position + totality duration for any location
+//  Uses NASA/Espenak path data with centerline interpolation.
+//  Duration: T = T_centerline × √(1 − (d/R)²)  where d = distance from
+//  centerline and R = path half-width.
 // =========================================================================
-function getSunPosition(lat, lon) {
-  // Find the two nearest centerline time-points and interpolate.
-  // We use longitude as the primary interpolation axis since the shadow
-  // sweeps roughly W-to-E across Spain.
-  let bestIdx = 0, bestDist = Infinity;
-  for (let i = 0; i < ECLIPSE_PATH.length; i++) {
-    const [,,,,,clat,clon] = ECLIPSE_PATH[i];
-    const d = Math.hypot(lat - clat, lon - clon);
-    if (d < bestDist) { bestDist = d; bestIdx = i; }
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const p1 = lat1 * Math.PI / 180, p2 = lat2 * Math.PI / 180;
+  const dp = (lat2 - lat1) * Math.PI / 180, dl = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dp/2)**2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function ptToSegDist(px, py, ax, ay, bx, by) {
+  // Returns [distance_km, t_fraction] from point to line segment
+  const midLat = (ay + by + py) / 3 * Math.PI / 180;
+  const kLat = 111.32, kLon = 111.32 * Math.cos(midLat);
+  const pxk = px*kLon, pyk = py*kLat;
+  const axk = ax*kLon, ayk = ay*kLat;
+  const bxk = bx*kLon, byk = by*kLat;
+  const dx = bxk-axk, dy = byk-ayk;
+  const s2 = dx*dx + dy*dy;
+  if (s2 < 1e-12) return [Math.hypot(pxk-axk, pyk-ayk), 0];
+  const t = Math.max(0, Math.min(1, ((pxk-axk)*dx + (pyk-ayk)*dy) / s2));
+  return [Math.hypot(pxk - (axk+t*dx), pyk - (ayk+t*dy)), t];
+}
+
+function getEclipseCircumstances(lat, lon) {
+  // Find nearest centerline segment
+  let bestDist = Infinity, bestI = 0, bestT = 0;
+  for (let i = 0; i < ECLIPSE_PATH.length - 1; i++) {
+    const a = ECLIPSE_PATH[i], b = ECLIPSE_PATH[i+1];
+    const [d, t] = ptToSegDist(lon, lat, a[6], a[5], b[6], b[5]);
+    if (d < bestDist) { bestDist = d; bestI = i; bestT = t; }
   }
 
-  // Interpolate between bestIdx and a neighbor
-  let i0 = Math.max(0, bestIdx - 1), i1 = Math.min(ECLIPSE_PATH.length - 1, bestIdx + 1);
-  if (bestIdx === 0) { i0 = 0; i1 = 1; }
-  if (bestIdx === ECLIPSE_PATH.length - 1) { i0 = ECLIPSE_PATH.length - 2; i1 = ECLIPSE_PATH.length - 1; }
+  const a = ECLIPSE_PATH[bestI], b = ECLIPSE_PATH[bestI + 1];
+  const lerp = (ai, bi) => a[ai] + bestT * (b[ai] - a[ai]);
 
-  const [,,,,,clat0,clon0,alt0,az0] = ECLIPSE_PATH[i0];
-  const [,,,,,clat1,clon1,alt1,az1] = ECLIPSE_PATH[i1];
+  const cLat = lerp(5,5), cLon = lerp(6,6);
+  const sunAlt0 = lerp(7,7), sunAz = lerp(8,8);
+  const pathWidth = lerp(9,9), clDur = lerp(10,10);
 
-  // Interpolation factor based on longitude
-  const dlon = clon1 - clon0;
-  const t = dlon !== 0 ? Math.max(0, Math.min(1, (lon - clon0) / dlon)) : 0.5;
+  // Interpolate limits
+  const nLat = lerp(1,1), nLon = lerp(2,2);
+  const sLat = lerp(3,3), sLon = lerp(4,4);
 
-  // Latitude correction: farther from centerline = slightly different timing
-  const centerLat = clat0 + t * (clat1 - clat0);
-  const latOffset = lat - centerLat;
-  // Being north of center means slightly earlier timing (higher sun), vice versa
-  const latCorrection = latOffset * 0.15; // empirical: ~0.15° alt per degree of latitude
+  // Distances
+  const distToN = haversineKm(lat, lon, nLat, nLon);
+  const distToS = haversineKm(lat, lon, sLat, sLon);
+  const distNS = haversineKm(nLat, nLon, sLat, sLon);
+  const halfW = distNS / 2;
+  const distCL = haversineKm(lat, lon, cLat, cLon);
 
-  const sunAlt = Math.max(0.5, alt0 + t * (alt1 - alt0) + latCorrection);
-  const sunAz = az0 + t * (az1 - az0);
+  // Inside path? Sum of distances to edges ≈ edge-to-edge distance
+  const inPath = (distToN + distToS) < (distNS * 1.02);
 
-  // Check if within path of totality
-  const [,nlat0,nlon0,slat0,slon0] = ECLIPSE_PATH[i0];
-  const [,nlat1,nlon1,slat1,slon1] = ECLIPSE_PATH[i1];
-  const nLat = nlat0 + t * (nlat1 - nlat0);
-  const sLat = slat0 + t * (slat1 - slat0);
-  const inPath = lat <= Math.max(nLat, sLat) + 0.5 && lat >= Math.min(nLat, sLat) - 0.5;
+  // Duration
+  let durSec = 0;
+  if (inPath && halfW > 0) {
+    const ratio = Math.min(distCL / halfW, 0.999);
+    durSec = clDur * Math.sqrt(1 - ratio * ratio);
+  }
 
-  return { sunAlt, sunAz, inPath, centerLat };
+  // Format duration string
+  const durMin = Math.floor(durSec / 60);
+  const durRemSec = durSec % 60;
+  const durStr = durSec > 0 ? `${durMin}m${durRemSec.toFixed(0).padStart(2,'0')}s` : '—';
+
+  // Latitude-adjusted sun altitude
+  const latCorrection = (lat - cLat) * 0.15;
+  const sunAlt = Math.max(0.5, sunAlt0 + latCorrection);
+
+  return {
+    sunAlt, sunAz, inPath,
+    durSec, durStr,
+    distCL: distCL.toFixed(1),
+    halfW: halfW.toFixed(0),
+    centerLat: cLat,
+  };
+}
+
+// Legacy wrapper
+function getSunPosition(lat, lon) {
+  return getEclipseCircumstances(lat, lon);
 }
 
 
@@ -648,6 +708,110 @@ async function prefetchTiles(lat, lon, radiusKm) {
 
 
 // =========================================================================
+//  CANOPY HEIGHT — Pre-baked Meta/WRI data (canopy_spain.png + .json)
+//  Generated by prepare_canopy.py. Pixel value = height in metres.
+//  Falls back gracefully if files aren't present.
+// =========================================================================
+let canopyEnabled = true;
+let canopyData = null;    // ImageData from the PNG
+let canopyMeta = null;    // {lat_min, lat_max, lon_min, lon_max, width, height}
+
+async function loadCanopyData() {
+  try {
+    // Load metadata
+    const metaResp = await fetch('canopy_spain.json');
+    if (!metaResp.ok) throw new Error('canopy_spain.json not found');
+    canopyMeta = await metaResp.json();
+
+    // Load PNG
+    const img = new window.Image();
+    img.crossOrigin = 'anonymous';
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = () => reject(new Error('canopy_spain.png not found'));
+      img.src = 'canopy_spain.png';
+    });
+
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    canopyData = ctx.getImageData(0, 0, img.width, img.height);
+
+    canopyProbeResult = 'ok';
+    console.log(`Canopy data loaded: ${img.width}×${img.height} px`);
+    return true;
+  } catch (e) {
+    canopyData = null;
+    canopyMeta = null;
+    canopyProbeResult = 'failed';
+    console.warn('Canopy data not available:', e.message);
+    return false;
+  }
+}
+
+function getCanopyHeight(lat, lon) {
+  if (!canopyEnabled || !canopyData || !canopyMeta) return 0;
+
+  const m = canopyMeta;
+  if (lat < m.lat_min || lat > m.lat_max || lon < m.lon_min || lon > m.lon_max) return 0;
+
+  // Map lat/lon to pixel coordinates
+  const col = Math.floor((lon - m.lon_min) / (m.lon_max - m.lon_min) * canopyData.width);
+  const row = Math.floor((m.lat_max - lat) / (m.lat_max - m.lat_min) * canopyData.height);
+
+  if (col < 0 || col >= canopyData.width || row < 0 || row >= canopyData.height) return 0;
+
+  // R channel = height in metres (grayscale PNG loaded into RGBA)
+  const idx = (row * canopyData.width + col) * 4;
+  return canopyData.data[idx]; // R channel
+}
+
+// Build a canopy height map along a ray (for computeHorizonAngle)
+function getCanopyAlongRay(lat, lon, azDeg, maxDist, step) {
+  if (!canopyEnabled || !canopyData) return null;
+  const heights = new Map();
+  for (let d = step; d <= maxDist; d += step) {
+    const p = destPoint(lat, lon, azDeg, d);
+    const h = getCanopyHeight(p.lat, p.lon);
+    if (h > 0.5) heights.set(d, h);
+  }
+  return heights.size > 0 ? heights : null;
+}
+
+// Canopy status indicator
+let canopyProbeResult = null; // null=untested, 'ok', 'failed'
+
+function updateCanopyStatus(msg) {
+  const el = document.getElementById('canopyStatus');
+  if (!el) return;
+  if (msg) { el.textContent = msg; return; }
+
+  if (!canopyEnabled) {
+    el.textContent = 'disabled';
+    el.style.color = 'var(--text-dim)';
+  } else if (canopyProbeResult === 'ok') {
+    el.textContent = '✓ data loaded';
+    el.style.color = 'var(--green)';
+  } else if (canopyProbeResult === 'failed') {
+    el.innerHTML = '✗ run <code style="font-size:0.6rem">prepare_canopy.py</code>';
+    el.style.color = 'var(--corona)';
+  } else {
+    el.textContent = 'loading…';
+    el.style.color = 'var(--text-dim)';
+  }
+}
+
+// Load canopy data on startup
+setTimeout(async () => {
+  updateCanopyStatus('loading…');
+  await loadCanopyData();
+  updateCanopyStatus();
+}, 300);
+
+
+// =========================================================================
 //  HORIZON COMPUTATION
 // =========================================================================
 const EARTH_R = 6371000;
@@ -661,11 +825,13 @@ function destPoint(lat, lon, azDeg, distM) {
   return { lat: φ2 * 180 / Math.PI, lon: λ2 * 180 / Math.PI };
 }
 
-async function computeHorizonAngle(lat, lon, azDeg, obsHeight, maxDist = 40000, step = 40) {
+async function computeHorizonAngle(lat, lon, azDeg, obsHeight, maxDist = 40000, step = 40, canopyMap = null) {
   const obsElev = await getElevation(lat, lon) + obsHeight;
   const Reff = EARTH_R / (1 - REFRACTION_K);
+  const CANOPY_SCAN_M = 500;
 
   let maxAngle = -90, maxDistFound = 0;
+  let maxCanopyAngle = -90, maxCanopyDist = 0;
   let dist = step;
 
   while (dist <= maxDist) {
@@ -676,20 +842,27 @@ async function computeHorizonAngle(lat, lon, azDeg, obsHeight, maxDist = 40000, 
     const apparentDh = dh - curvDrop;
     const angle = Math.atan2(apparentDh, dist) * 180 / Math.PI;
 
-    if (angle > maxAngle) {
-      maxAngle = angle;
-      maxDistFound = dist;
+    if (angle > maxAngle) { maxAngle = angle; maxDistFound = dist; }
+
+    // Canopy: check within scan radius
+    if (canopyMap && dist <= CANOPY_SCAN_M) {
+      const ch = canopyMap.get(dist) || 0;
+      if (ch > 0.5) {
+        const cAngle = Math.atan2(apparentDh + ch, dist) * 180 / Math.PI;
+        if (cAngle > maxCanopyAngle) { maxCanopyAngle = cAngle; maxCanopyDist = dist; }
+      } else if (angle > maxCanopyAngle) {
+        maxCanopyAngle = angle; maxCanopyDist = dist;
+      }
+    } else if (angle > maxCanopyAngle) {
+      maxCanopyAngle = angle; maxCanopyDist = dist;
     }
 
-    // Adaptive stepping: go faster when terrain is clearly below horizon
-    if (dist > 10000 && angle < maxAngle - 5) {
-      dist += step * 4;
-    } else {
-      dist += step;
-    }
+    if (dist > 10000 && angle < maxAngle - 5) { dist += step * 4; } else { dist += step; }
   }
 
-  return { angle: maxAngle, distance: maxDistFound };
+  if (!canopyMap) { maxCanopyAngle = maxAngle; maxCanopyDist = maxDistFound; }
+
+  return { angle: maxAngle, distance: maxDistFound, canopyAngle: maxCanopyAngle, canopyDistance: maxCanopyDist };
 }
 
 
@@ -698,51 +871,66 @@ async function computeHorizonAngle(lat, lon, azDeg, obsHeight, maxDist = 40000, 
 // =========================================================================
 async function analyzePin(pin, progressCb) {
   const { lat, lon, height, name } = pin;
-  const sun = getSunPosition(lat, lon);
+  const ec = getEclipseCircumstances(lat, lon);
 
-  // Prefetch elevation tiles for the area
+  // Prefetch elevation tiles
   if (progressCb) progressCb(0, 'Loading elevation data…');
   const numTiles = await prefetchTiles(lat, lon, 42);
-  if (progressCb) progressCb(10, `Loaded ${numTiles} terrain tiles`);
+  if (progressCb) progressCb(8, `Loaded ${numTiles} terrain tiles`);
+
+  // Optionally load canopy data for rays
+  let canopyStatus = 'disabled';
+  if (canopyEnabled) {
+    if (canopyData && canopyMeta) {
+      canopyStatus = 'available';
+    } else {
+      canopyStatus = 'unavailable';
+      if (progressCb) progressCb(12, 'Canopy data not loaded — run prepare_canopy.py');
+    }
+  }
 
   // Scan azimuth band: sun ± 20°
   const halfWidth = 20;
   const azStep = 0.5;
-  const azStart = sun.sunAz - halfWidth;
-  const azEnd = sun.sunAz + halfWidth;
+  const azStart = ec.sunAz - halfWidth;
+  const azEnd = ec.sunAz + halfWidth;
   const azimuths = [];
   const angles = [];
+  const canopyAngles = [];
   const distances = [];
 
   let i = 0;
   const total = Math.ceil((azEnd - azStart) / azStep);
 
   for (let az = azStart; az < azEnd; az += azStep) {
-    const result = await computeHorizonAngle(lat, lon, az, height);
+    // Get canopy heights along this ray if available
+    let canopyMap = null;
+    if (canopyStatus === 'available') {
+      canopyMap = getCanopyAlongRay(lat, lon, az, 500, 40);
+    }
+
+    const result = await computeHorizonAngle(lat, lon, az, height, 40000, 40, canopyMap);
     azimuths.push(az);
     angles.push(result.angle);
+    canopyAngles.push(result.canopyAngle);
     distances.push(result.distance);
     i++;
     if (progressCb && i % 4 === 0) {
-      progressCb(10 + 85 * (i / total), `Tracing horizon: ${Math.round(100*i/total)}%`);
+      progressCb(12 + 83 * (i / total), `Tracing horizon: ${Math.round(100*i/total)}%`);
     }
   }
 
   // Find horizon at exact sun azimuth
   let closestIdx = 0, closestDiff = Infinity;
   for (let j = 0; j < azimuths.length; j++) {
-    const d = Math.abs(azimuths[j] - sun.sunAz);
+    const d = Math.abs(azimuths[j] - ec.sunAz);
     if (d < closestDiff) { closestDiff = d; closestIdx = j; }
   }
 
   const horizonAtSun = angles[closestIdx];
-  const margin = sun.sunAlt - horizonAtSun;
-
-  // Worst in band
-  let worstAngle = -90, worstAz = 0;
-  for (let j = 0; j < angles.length; j++) {
-    if (angles[j] > worstAngle) { worstAngle = angles[j]; worstAz = azimuths[j]; }
-  }
+  const canopyAtSun = canopyAngles[closestIdx];
+  const margin = ec.sunAlt - horizonAtSun;
+  const canopyMargin = ec.sunAlt - canopyAtSun;
 
   const groundElev = await getElevation(lat, lon);
 
@@ -751,15 +939,23 @@ async function analyzePin(pin, progressCb) {
   return {
     name, lat, lon, height,
     groundElev: Math.round(groundElev),
-    sunAlt: sun.sunAlt,
-    sunAz: sun.sunAz,
-    inPath: sun.inPath,
-    horizonAtSun: horizonAtSun,
-    margin: margin,
+    sunAlt: ec.sunAlt,
+    sunAz: ec.sunAz,
+    inPath: ec.inPath,
+    durSec: ec.durSec,
+    durStr: ec.durStr,
+    distCL: ec.distCL,
+    halfW: ec.halfW,
+    horizonAtSun,
+    canopyAtSun,
+    margin,
+    canopyMargin,
     visible: margin > 0,
-    worstHorizon: worstAngle,
-    worstAz: worstAz,
-    azimuths, angles, distances,
+    visibleCanopy: canopyMargin > 0,
+    canopyStatus,
+    worstHorizon: Math.max(...angles),
+    worstAz: azimuths[angles.indexOf(Math.max(...angles))],
+    azimuths, angles, canopyAngles, distances,
   };
 }
 
@@ -917,18 +1113,19 @@ function updatePinList() {
 
   let html = '';
   for (const pin of pins) {
-    const sun = getSunPosition(pin.lat, pin.lon);
+    const ec = getEclipseCircumstances(pin.lat, pin.lon);
     html += `
       <div class="result-card" style="padding:0.75rem">
         <div style="display:flex;justify-content:space-between;align-items:center">
           <div>
             <strong style="font-size:0.88rem">${pin.name}</strong>
-            ${!sun.inPath ? '<span style="font-size:0.65rem;color:var(--corona);margin-left:0.3rem">⚠ near edge</span>' : ''}
+            ${!ec.inPath ? '<span style="font-size:0.65rem;color:var(--corona);margin-left:0.3rem">⚠ outside path</span>' : ''}
             <div style="font-size:0.72rem;color:var(--text-dim);font-family:JetBrains Mono,monospace;margin-top:0.15rem">
               ${pin.lat.toFixed(5)}, ${pin.lon.toFixed(5)} · h=${pin.height}m
             </div>
             <div style="font-size:0.7rem;color:var(--text-dim);margin-top:0.1rem">
-              Sun: alt ${sun.sunAlt.toFixed(1)}° · az ${sun.sunAz.toFixed(0)}°
+              Sun: alt ${ec.sunAlt.toFixed(1)}° · az ${ec.sunAz.toFixed(0)}°
+              ${ec.inPath ? ` · <span style="color:var(--gold)">Totality: ${ec.durStr}</span>` : ''}
             </div>
           </div>
           <button class="btn-tiny danger" onclick="removePin(${pin.id})" title="Remove">✕</button>
@@ -972,10 +1169,11 @@ async function analyzeAllPins() {
       const mi = markers.find(m => m.id === pin.id);
       if (mi) {
         mi.marker.setIcon(result.visible ? resultIconVisible : resultIconBlocked);
+        const durLabel = result.durSec > 0 ? ` · Totality: ${result.durStr}` : '';
         mi.marker.setPopupContent(
           `<strong>${result.name}</strong><br>` +
           `${result.visible ? '✅ Visible' : '❌ Blocked'} · Margin: ${result.margin.toFixed(1)}°<br>` +
-          `Terrain horizon: ${result.horizonAtSun.toFixed(1)}° · Sun: ${result.sunAlt.toFixed(1)}°`
+          `Terrain: ${result.horizonAtSun.toFixed(1)}° · Sun: ${result.sunAlt.toFixed(1)}°${durLabel}`
         );
       }
     } catch (err) {
@@ -1037,14 +1235,22 @@ function renderResult(r, rank) {
 
   const vis = r.visible;
   const rankLabel = rank !== undefined ? `#${rank + 1} · ` : '';
+  const durLabel = r.durSec > 0 ? r.durStr : '—';
+  const canopyWarn = r.canopyStatus === 'available' && r.visible && !r.visibleCanopy;
+  const canopyExtra = r.canopyStatus === 'available' ? r.canopyAtSun - r.horizonAtSun : 0;
 
   return `
     <div class="result-card ${vis ? 'visible' : 'blocked'}">
       <div class="result-name">
         ${r.name}
         <span class="badge ${vis ? 'badge-visible' : 'badge-blocked'}">${vis ? 'Visible' : 'Blocked'}</span>
+        ${canopyWarn ? '<span class="badge" style="background:#2a4a2a;color:#6d6">🌲 Tree risk</span>' : ''}
       </div>
       <div class="result-stats">
+        <div class="stat">
+          <div class="stat-label">Totality</div>
+          <div class="stat-value" style="color:var(--gold)">${durLabel}</div>
+        </div>
         <div class="stat">
           <div class="stat-label">Clearance</div>
           <div class="stat-value ${r.margin >= 0 ? 'positive' : 'negative'}">${r.margin >= 0 ? '+' : ''}${r.margin.toFixed(1)}°</div>
@@ -1054,7 +1260,7 @@ function renderResult(r, rank) {
           <div class="stat-value">${r.sunAlt.toFixed(1)}°</div>
         </div>
         <div class="stat">
-          <div class="stat-label">Horizon at sun</div>
+          <div class="stat-label">Horizon</div>
           <div class="stat-value">${r.horizonAtSun.toFixed(1)}°</div>
         </div>
         <div class="stat">
@@ -1062,10 +1268,16 @@ function renderResult(r, rank) {
           <div class="stat-value">${r.groundElev} m</div>
         </div>
       </div>
+      ${canopyExtra > 0.1 ? `
+        <div style="font-size:0.72rem;color:#6d6;margin:0.3rem 0;padding:0.3rem 0.5rem;background:rgba(40,80,40,0.2);border-radius:4px">
+          🌲 Trees add ≈${canopyExtra.toFixed(1)}° to horizon · Canopy margin: ${r.canopyMargin >= 0 ? '+' : ''}${r.canopyMargin.toFixed(1)}°
+        </div>
+      ` : ''}
       <div class="horizon-chart"><canvas id="chart-${r.id}"></canvas></div>
       <div style="font-size:0.68rem;color:var(--text-dim);margin-top:0.35rem;font-family:JetBrains Mono,monospace">
-        ${rankLabel}${r.lat.toFixed(4)}°N, ${Math.abs(r.lon).toFixed(4)}°${r.lon >= 0 ? 'E' : 'W'} · Sun az ${r.sunAz.toFixed(0)}° · h=${r.height}m
-        ${!r.inPath ? ' · ⚠ may be outside totality' : ''}
+        ${rankLabel}${r.lat.toFixed(4)}°N, ${Math.abs(r.lon).toFixed(4)}°${r.lon >= 0 ? 'E' : 'W'} · Sun az ${r.sunAz.toFixed(0)}°
+        ${r.durSec > 0 ? ` · ${r.distCL} km from CL` : ''}
+        ${!r.inPath ? ' · ⚠ outside totality' : ''}
       </div>
     </div>`;
 }
@@ -1091,7 +1303,8 @@ function drawHorizonChart(r) {
 
   // Data bounds
   const azMin = r.azimuths[0], azMax = r.azimuths[r.azimuths.length - 1];
-  const angMax = Math.max(r.sunAlt + 3, Math.max(...r.angles) + 2);
+  const allAngles = r.canopyAngles ? [...r.angles, ...r.canopyAngles] : r.angles;
+  const angMax = Math.max(r.sunAlt + 3, Math.max(...allAngles) + 2);
   const angMin = Math.min(-1, Math.min(...r.angles) - 1);
 
   const toX = az => (az - azMin) / (azMax - azMin) * W;
@@ -1138,6 +1351,39 @@ function drawHorizonChart(r) {
   ctx.strokeStyle = '#a0724a';
   ctx.lineWidth = 1.5;
   ctx.stroke();
+
+  // Canopy overlay (green fill between terrain and canopy lines)
+  if (r.canopyAngles && r.canopyStatus === 'available') {
+    let hasCanopy = false;
+    for (let i = 0; i < r.canopyAngles.length; i++) {
+      if (r.canopyAngles[i] > r.angles[i] + 0.05) { hasCanopy = true; break; }
+    }
+    if (hasCanopy) {
+      ctx.beginPath();
+      for (let i = 0; i < r.azimuths.length; i++) {
+        const x = toX(r.azimuths[i]), y = toY(r.angles[i]);
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+      for (let i = r.azimuths.length - 1; i >= 0; i--) {
+        ctx.lineTo(toX(r.azimuths[i]), toY(r.canopyAngles[i]));
+      }
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(72,216,155,0.35)';
+      ctx.fill();
+
+      // Canopy line
+      ctx.beginPath();
+      for (let i = 0; i < r.azimuths.length; i++) {
+        const x = toX(r.azimuths[i]), y = toY(r.canopyAngles[i]);
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = '#48d89b';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
 
   // Sun altitude line
   const ySun = toY(r.sunAlt);
