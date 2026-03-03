@@ -575,6 +575,32 @@ function ptToSegDist(px, py, ax, ay, bx, by) {
   return [Math.hypot(pxk - (axk+t*dx), pyk - (ayk+t*dy)), t];
 }
 
+// Build the eclipse path polygon once for point-in-polygon tests
+let _eclipsePathPoly = null;
+function getEclipsePathPoly() {
+  if (_eclipsePathPoly) return _eclipsePathPoly;
+  const north = ECLIPSE_PATH.map(r => [r[1], r[2]]); // [lat, lon]
+  const south = ECLIPSE_PATH.map(r => [r[3], r[4]]);
+  // Polygon: north edge forward, then south edge reversed (same as the drawn polygon)
+  _eclipsePathPoly = [...north, ...[...south].reverse()];
+  return _eclipsePathPoly;
+}
+
+function pointInEclipsePath(lat, lon) {
+  const poly = getEclipsePathPoly();
+  // Ray-casting algorithm
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const yi = poly[i][0], xi = poly[i][1];
+    const yj = poly[j][0], xj = poly[j][1];
+    if (((yi > lat) !== (yj > lat)) &&
+        (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi)) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
 function getEclipseCircumstances(lat, lon) {
   // Find nearest centerline segment
   let bestDist = Infinity, bestI = 0, bestT = 0;
@@ -602,8 +628,8 @@ function getEclipseCircumstances(lat, lon) {
   const halfW = distNS / 2;
   const distCL = haversineKm(lat, lon, cLat, cLon);
 
-  // Inside path? Sum of distances to edges ≈ edge-to-edge distance
-  const inPath = (distToN + distToS) < (distNS * 1.02);
+  // Inside path? Use ray-casting point-in-polygon against the path outline
+  const inPath = pointInEclipsePath(lat, lon);
 
   // Duration
   let durSec = 0;
