@@ -3,8 +3,8 @@
 prepare_canopy.py — Download and prepare canopy height data for the web app.
 
 Downloads Meta/WRI Global Canopy Height tiles covering the 2026 eclipse path
-across Spain, downsamples to ~100 m resolution, and exports a single PNG file
-that the web app can load without CORS issues.
+across Spain, downsamples to ~30 m resolution, and exports a directory of small
+1x1 degree PNG tiles that the web app loads on demand.
 
 PREREQUISITES
     pip install numpy rasterio Pillow
@@ -12,14 +12,15 @@ PREREQUISITES
 USAGE
     python prepare_canopy.py
 
-    This creates two files in the current directory:
-      canopy_spain.png   — canopy height map (R channel = height in metres)
-      canopy_spain.json  — bounding box metadata for the web app
+    Creates:
+      canopy_tiles/           — directory of 1x1 degree PNG tiles
+      canopy_tiles/tiles.json — metadata listing available tiles
 
-    Copy both files alongside index.html when deploying.
+    Copy the entire canopy_tiles/ folder alongside index.html when deploying.
 
-    Optionally specify a custom bounding box:
+    Optionally specify a custom bounding box or resolution:
       python prepare_canopy.py --lat-min 41 --lat-max 43 --lon-min -6 --lon-max -3
+      python prepare_canopy.py --resolution 30
 
 DATA SOURCE
     Meta/WRI Global Canopy Height Map (2024)
@@ -27,9 +28,9 @@ DATA SOURCE
     1 m resolution, Cloud-Optimized GeoTIFF, EPSG:3857
 
 OUTPUT FORMAT
-    PNG image where each pixel's R channel = canopy height in metres (0–255).
-    G and B channels are zero. This makes decoding trivial in JavaScript:
-        const height = imageData.data[pixelIndex * 4];  // R channel
+    PNG tiles where each pixel = canopy height in metres (0-255, grayscale).
+    Tiles named canopy_{lat}_{lon}.png (SW corner, signed integers).
+    Empty tiles (all zeros) are omitted to save space.
 """
 
 import argparse
@@ -41,8 +42,8 @@ from pathlib import Path
 import numpy as np
 
 try:
-    import rasterio  # type: ignore[import-not-found]
-    from rasterio.windows import from_bounds  # type: ignore[import-not-found]
+    import rasterio
+    from rasterio.windows import from_bounds
 except ImportError:
     print("ERROR: rasterio is required. Install with: pip install rasterio")
     sys.exit(1)
@@ -54,23 +55,20 @@ except ImportError:
     sys.exit(1)
 
 
-# ── Defaults: bounding box covering the eclipse path across Spain ──────────
+# -- Defaults ---------------------------------------------------------------
 DEFAULT_LAT_MIN = 38.5
 DEFAULT_LAT_MAX = 44.5
 DEFAULT_LON_MIN = -10.5
 DEFAULT_LON_MAX = 5.0
+OUTPUT_RESOLUTION_M = 30
 
-# Output resolution in metres (100 m is a good balance)
-OUTPUT_RESOLUTION_M = 100
-
-# Meta/WRI CHM base URL (public S3, no auth needed)
 CHM_BASE_URL = "https://dataforgood-fb-data.s3.amazonaws.com/forests/v1/alsgedi_global_v6_float/chm"
 
 
-def lat_lon_to_quadkey(lat: float, lon: float, zoom: int = 9) -> str:
+def lat_lon_to_quadkey(lat, lon, zoom=9):
     """Convert a WGS84 coordinate to a Bing Maps quadkey."""
     lat_rad = math.radians(lat)
-    n = 2**zoom
+    n = 2 ** zoom
     x = int((lon + 180) / 360 * n)
     y = int((1 - math.log(math.tan(lat_rad) + 1 / math.cos(lat_rad)) / math.pi) / 2 * n)
     x = max(0, min(n - 1, x))
@@ -87,7 +85,7 @@ def lat_lon_to_quadkey(lat: float, lon: float, zoom: int = 9) -> str:
     return qk
 
 
-def quadkey_bounds(qk: str) -> tuple[float, float, float, float]:
+def quadkey_bounds(qk):
     """Return (lat_min, lon_min, lat_max, lon_max) for a quadkey."""
     zoom = len(qk)
     x = y = 0
@@ -98,7 +96,7 @@ def quadkey_bounds(qk: str) -> tuple[float, float, float, float]:
             x |= mask
         if d & 2:
             y |= mask
-    n = 2**zoom
+    n = 2 ** zoom
     lon_min = x / n * 360 - 180
     lon_max = (x + 1) / n * 360 - 180
     lat_max = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n))))
@@ -106,7 +104,7 @@ def quadkey_bounds(qk: str) -> tuple[float, float, float, float]:
     return lat_min, lon_min, lat_max, lon_max
 
 
-def to_mercator(lat: float, lon: float) -> tuple[float, float]:
+def to_mercator(lat, lon):
     """Convert WGS84 to EPSG:3857 Web Mercator coordinates."""
     x = lon * 20037508.34 / 180.0
     lat_rad = math.radians(lat)
@@ -114,12 +112,10 @@ def to_mercator(lat: float, lon: float) -> tuple[float, float]:
     return x, y
 
 
-def find_quadkeys(
-    lat_min: float, lat_max: float, lon_min: float, lon_max: float, zoom: int = 9
-) -> list[str]:
+def find_quadkeys(lat_min, lat_max, lon_min, lon_max, zoom=9):
     """Find all unique quadkeys that cover a bounding box."""
     qks = set()
-    step = 0.3  # degrees — fine enough to hit all tiles at zoom 9
+    step = 0.3
     lat = lat_min
     while lat <= lat_max:
         lon = lon_min
@@ -130,18 +126,8 @@ def find_quadkeys(
     return sorted(qks)
 
 
-def read_canopy_tile(
-    quadkey: str,
-    bbox_merc: tuple[float, float, float, float],
-    out_width: int,
-    out_height: int,
-) -> np.ndarray | None:
-    """
-    Read a portion of a Meta/WRI canopy height COG tile.
-
-    Uses rasterio's windowed reading to download only the pixels we need.
-    Returns a 2D float32 array, or None if the tile doesn't exist.
-    """
+def read_canopy_tile(quadkey, bbox_merc, out_width, out_height):
+    """Read a portion of a Meta/WRI canopy height COG tile (downsampled)."""
     url = f"{CHM_BASE_URL}/{quadkey}.tif"
     try:
         env = rasterio.Env(
@@ -154,14 +140,12 @@ def read_canopy_tile(
         )
         with env:
             with rasterio.open(url) as ds:
-                # Window in the tile's coordinate system
                 xmin, ymin, xmax, ymax = bbox_merc
                 try:
                     window = from_bounds(xmin, ymin, xmax, ymax, ds.transform)
                 except Exception:
                     return None
 
-                # Clamp window to valid range
                 win_col_off = max(0, int(window.col_off))
                 win_row_off = max(0, int(window.row_off))
                 win_width = min(int(window.width), ds.width - win_col_off)
@@ -171,10 +155,8 @@ def read_canopy_tile(
                     return None
 
                 clamped = rasterio.windows.Window(
-                    win_col_off, win_row_off, win_width, win_height
-                )
+                    win_col_off, win_row_off, win_width, win_height)
 
-                # Read at reduced resolution
                 data = ds.read(
                     1,
                     window=clamped,
@@ -188,104 +170,88 @@ def read_canopy_tile(
                 return data
 
     except Exception:
-        # Tile doesn't exist or network error — not all quadkeys have data
         return None
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Prepare canopy height data for the eclipse web app"
-    )
+        description="Prepare canopy height data for the eclipse web app")
     parser.add_argument("--lat-min", type=float, default=DEFAULT_LAT_MIN)
     parser.add_argument("--lat-max", type=float, default=DEFAULT_LAT_MAX)
     parser.add_argument("--lon-min", type=float, default=DEFAULT_LON_MIN)
     parser.add_argument("--lon-max", type=float, default=DEFAULT_LON_MAX)
-    parser.add_argument(
-        "--resolution",
-        type=float,
-        default=OUTPUT_RESOLUTION_M,
-        help="Output resolution in metres (default: 100)",
-    )
-    parser.add_argument(
-        "--output",
-        type=str,
-        default="canopy_spain",
-        help="Output filename prefix (default: canopy_spain)",
-    )
+    parser.add_argument("--resolution", type=float, default=OUTPUT_RESOLUTION_M,
+                        help="Output resolution in metres (default: 30)")
+    parser.add_argument("--output-dir", type=str, default="canopy_tiles",
+                        help="Output directory (default: canopy_tiles)")
     args = parser.parse_args()
 
     lat_min, lat_max = args.lat_min, args.lat_max
     lon_min, lon_max = args.lon_min, args.lon_max
     res_m = args.resolution
 
+    # Snap bounds outward to integer degrees (tile boundaries)
+    tile_lat_min = math.floor(lat_min)
+    tile_lat_max = math.ceil(lat_max)
+    tile_lon_min = math.floor(lon_min)
+    tile_lon_max = math.ceil(lon_max)
+
     print("=" * 65)
-    print("  CANOPY HEIGHT DATA PREPARATION")
-    print(f"  Bounding box: {lat_min}–{lat_max}°N, {lon_min}–{lon_max}°E")
+    print("  CANOPY HEIGHT DATA PREPARATION (tiled)")
+    print(f"  Bounding box: {lat_min}-{lat_max} N, {lon_min}-{lon_max} E")
+    print(f"  Tile grid: {tile_lat_min}-{tile_lat_max} N, {tile_lon_min}-{tile_lon_max} E")
     print(f"  Resolution: {res_m} m")
     print("=" * 65)
 
-    # Calculate output image dimensions
-    lat_extent_m = (lat_max - lat_min) * 111320
-    mid_lat = (lat_min + lat_max) / 2
-    lon_extent_m = (lon_max - lon_min) * 111320 * math.cos(math.radians(mid_lat))
-
+    # Calculate total mosaic dimensions
+    lat_extent_m = (tile_lat_max - tile_lat_min) * 111320
+    mid_lat = (tile_lat_min + tile_lat_max) / 2
+    lon_extent_m = (tile_lon_max - tile_lon_min) * 111320 * math.cos(math.radians(mid_lat))
     out_width = int(lon_extent_m / res_m)
     out_height = int(lat_extent_m / res_m)
-    print(f"\n  Output image: {out_width} × {out_height} pixels")
+    print(f"\n  Full mosaic: {out_width} x {out_height} pixels")
 
-    # Create output array
+    # Build mosaic
     output = np.zeros((out_height, out_width), dtype=np.float32)
 
-    # Find all quadkeys covering the bbox
-    quadkeys = find_quadkeys(lat_min, lat_max, lon_min, lon_max)
-    print(f"  Quadkeys to check: {len(quadkeys)}")
-    print()
+    quadkeys = find_quadkeys(tile_lat_min, tile_lat_max, tile_lon_min, tile_lon_max)
+    print(f"  Quadkeys to check: {len(quadkeys)}\n")
 
-    # Convert output bbox to Web Mercator
-    x_min, y_min = to_mercator(lat_min, lon_min)
-    x_max, y_max = to_mercator(lat_max, lon_max)
-
-    # Process each quadkey
     success = 0
     skipped = 0
     for i, qk in enumerate(quadkeys):
         qk_lat_min, qk_lon_min, qk_lat_max, qk_lon_max = quadkey_bounds(qk)
 
-        # Find the overlap between this tile and our output bbox
-        overlap_lat_min = max(lat_min, qk_lat_min)
-        overlap_lat_max = min(lat_max, qk_lat_max)
-        overlap_lon_min = max(lon_min, qk_lon_min)
-        overlap_lon_max = min(lon_max, qk_lon_max)
+        overlap_lat_min = max(tile_lat_min, qk_lat_min)
+        overlap_lat_max = min(tile_lat_max, qk_lat_max)
+        overlap_lon_min = max(tile_lon_min, qk_lon_min)
+        overlap_lon_max = min(tile_lon_max, qk_lon_max)
 
         if overlap_lat_min >= overlap_lat_max or overlap_lon_min >= overlap_lon_max:
             skipped += 1
             continue
 
-        # Output pixel range for this tile's contribution
-        col_start = int((overlap_lon_min - lon_min) / (lon_max - lon_min) * out_width)
-        col_end = int((overlap_lon_max - lon_min) / (lon_max - lon_min) * out_width)
-        row_start = int((lat_max - overlap_lat_max) / (lat_max - lat_min) * out_height)
-        row_end = int((lat_max - overlap_lat_min) / (lat_max - lat_min) * out_height)
+        col_start = int((overlap_lon_min - tile_lon_min) / (tile_lon_max - tile_lon_min) * out_width)
+        col_end = int((overlap_lon_max - tile_lon_min) / (tile_lon_max - tile_lon_min) * out_width)
+        row_start = int((tile_lat_max - overlap_lat_max) / (tile_lat_max - tile_lat_min) * out_height)
+        row_end = int((tile_lat_max - overlap_lat_min) / (tile_lat_max - tile_lat_min) * out_height)
 
         tile_w = max(1, col_end - col_start)
         tile_h = max(1, row_end - row_start)
 
-        # Convert overlap bounds to Mercator for the COG read
         ox_min, oy_min = to_mercator(overlap_lat_min, overlap_lon_min)
         ox_max, oy_max = to_mercator(overlap_lat_max, overlap_lon_max)
 
-        print(f"  [{i + 1}/{len(quadkeys)}] {qk} ", end="", flush=True)
+        print(f"  [{i+1}/{len(quadkeys)}] {qk} ", end="", flush=True)
         data = read_canopy_tile(qk, (ox_min, oy_min, ox_max, oy_max), tile_w, tile_h)
 
         if data is not None and data.max() > 0:
-            # Place into output array
             h, w = data.shape
             target_h = min(h, row_end - row_start)
             target_w = min(w, col_end - col_start)
-            output[
-                row_start : row_start + target_h, col_start : col_start + target_w
-            ] = data[:target_h, :target_w]
-            print(f"OK (max height: {data.max():.0f} m)")
+            output[row_start:row_start + target_h,
+                   col_start:col_start + target_w] = data[:target_h, :target_w]
+            print(f"OK (max: {data.max():.0f} m)")
             success += 1
         else:
             print("no data / empty")
@@ -294,39 +260,85 @@ def main():
     print(f"\n  Tiles with data: {success}")
     print(f"  Tiles skipped: {skipped}")
 
-    # Clamp to uint8 (0–255 m range, 1 m precision)
     output = np.clip(output, 0, 255).astype(np.uint8)
-
     nonzero = np.count_nonzero(output)
     total = output.size
-    print(f"  Non-zero pixels: {nonzero} / {total} ({100 * nonzero / total:.1f}%)")
+    print(f"  Non-zero pixels: {nonzero} / {total} ({100*nonzero/total:.1f}%)")
     print(f"  Max canopy height: {output.max()} m")
 
-    # Save as PNG (R channel = height)
-    png_path = Path(f"{args.output}.png")
-    img = Image.fromarray(output, mode="L")  # grayscale
-    img.save(png_path, optimize=True)
-    png_size = png_path.stat().st_size
-    print(f"\n  Saved: {png_path} ({png_size / 1024:.0f} KB)")
+    # -- Slice into 1x1 degree tiles ----------------------------------------
+    out_dir = Path(args.output_dir)
+    out_dir.mkdir(exist_ok=True)
+
+    n_lat = tile_lat_max - tile_lat_min
+    n_lon = tile_lon_max - tile_lon_min
+    rows_per_tile = out_height // n_lat
+    cols_per_tile = out_width // n_lon
+
+    print(f"\n  Slicing into {n_lat} x {n_lon} = {n_lat * n_lon} potential tiles")
+    print(f"  Each tile: {cols_per_tile} x {rows_per_tile} px")
+
+    tile_list = []
+    total_size = 0
+
+    for lat_i in range(n_lat):
+        tile_lat = tile_lat_max - 1 - lat_i  # SW corner latitude
+        r_start = lat_i * rows_per_tile
+        r_end = (lat_i + 1) * rows_per_tile if lat_i < n_lat - 1 else out_height
+
+        for lon_i in range(n_lon):
+            tile_lon = tile_lon_min + lon_i  # SW corner longitude
+            c_start = lon_i * cols_per_tile
+            c_end = (lon_i + 1) * cols_per_tile if lon_i < n_lon - 1 else out_width
+
+            patch = output[r_start:r_end, c_start:c_end]
+
+            if np.count_nonzero(patch) == 0:
+                continue
+
+            fname = f"canopy_{tile_lat}_{tile_lon}.png"
+            img = Image.fromarray(patch, mode="L")
+            img.save(out_dir / fname, optimize=True)
+            fsize = (out_dir / fname).stat().st_size
+            total_size += fsize
+
+            tile_list.append({
+                "lat": tile_lat,
+                "lon": tile_lon,
+                "file": fname,
+                "kb": round(fsize / 1024, 1),
+                "max_h": int(patch.max()),
+            })
 
     # Save metadata
     meta = {
-        "lat_min": lat_min,
-        "lat_max": lat_max,
-        "lon_min": lon_min,
-        "lon_max": lon_max,
-        "width": out_width,
-        "height": out_height,
+        "lat_min": tile_lat_min,
+        "lat_max": tile_lat_max,
+        "lon_min": tile_lon_min,
+        "lon_max": tile_lon_max,
+        "tile_size_deg": 1,
         "resolution_m": res_m,
+        "tile_width": cols_per_tile,
+        "tile_height": rows_per_tile,
         "encoding": "grayscale_uint8_metres",
         "source": "Meta/WRI Global Canopy Height Map 2024",
-        "description": "Pixel value = canopy height in metres (0-255)",
+        "tiles": tile_list,
     }
-    json_path = Path(f"{args.output}.json")
+    json_path = out_dir / "tiles.json"
     json_path.write_text(json.dumps(meta, indent=2))
-    print(f"  Saved: {json_path}")
 
-    print("\n  Copy both files alongside index.html to enable canopy analysis.")
+    print(f"\n  Saved {len(tile_list)} non-empty tiles to {out_dir}/")
+    print(f"  Total size: {total_size / 1024:.0f} KB ({total_size / 1024 / 1024:.1f} MB)")
+    print(f"  Metadata: {json_path}")
+    print(f"  Empty tiles skipped: {n_lat * n_lon - len(tile_list)}")
+
+    if tile_list:
+        tile_list.sort(key=lambda t: t["kb"], reverse=True)
+        print(f"\n  Largest tiles:")
+        for t in tile_list[:5]:
+            print(f"    {t['file']:30s}  {t['kb']:6.1f} KB  (max {t['max_h']} m)")
+
+    print(f"\n  Copy the {out_dir}/ folder alongside index.html to deploy.")
     print("  Done!")
 
 
