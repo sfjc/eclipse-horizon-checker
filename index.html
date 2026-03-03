@@ -349,6 +349,18 @@
   .legend-swatch {
     width: 18px; height: 3px; border-radius: 2px; flex-shrink: 0;
   }
+  .map-layers {
+    position: absolute; bottom: 28px; left: 12px; z-index: 800;
+    background: rgba(17,24,39,0.92); backdrop-filter: blur(8px);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.45rem 0.65rem; font-size: 0.7rem; color: var(--text-muted);
+  }
+  .map-layers label {
+    display: flex; align-items: center; gap: 0.35rem; cursor: pointer;
+    margin-bottom: 0.2rem; white-space: nowrap;
+  }
+  .map-layers label:last-child { margin-bottom: 0; }
+  .map-layers input[type=checkbox] { accent-color: var(--green); }
 </style>
 </head>
 <body>
@@ -368,10 +380,15 @@
   <div class="map-container">
     <div id="map"></div>
     <div class="map-overlay-coords" id="coordsDisplay">Click map to place a pin</div>
+    <div class="map-layers">
+      <label><input type="checkbox" id="hillshadeToggle" checked onchange="toggleHillshade(this.checked)"> ⛰ Terrain</label>
+      <label><input type="checkbox" id="canopyMapToggle" checked onchange="toggleCanopyOverlay(this.checked)"> 🌲 Trees</label>
+    </div>
     <div class="map-legend">
       <div class="legend-item"><div class="legend-swatch" style="background:var(--gold)"></div> Centerline</div>
       <div class="legend-item"><div class="legend-swatch" style="background:var(--gold); opacity:0.4"></div> Path of totality</div>
       <div class="legend-item"><div class="legend-swatch" style="background:var(--corona); height:6px; width:6px; border-radius:50%;"></div> Your pins</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:rgba(60,180,90,0.7)"></div> Tree canopy (zoom in)</div>
     </div>
   </div>
 
@@ -526,6 +543,8 @@ const ECLIPSE_PATH = [
   [1086, 42+54.5/60, -(2+5.1/60), 43+36.4/60, -(9+33.1/60), 43+22.3/60, -(6+11.3/60), 10, 281, 304, 109.3],
   [1088, 40+39.9/60, 3+17.7/60, 42+15.8/60, -(7+14.2/60), 41+49.0/60, -(3+11.1/60), 8, 283, 294, 104.6],
   [1090, 39+42.5/60, 6+20.4/60, 40+41.0/60, -(4+2.4/60), 39+24.5/60, 2+57.0/60, 2, 288, 270, 95.8],
+  // Sunset terminator — geometric end of totality path (NASA Limits row)
+  [1092, 39+42.5/60, 6+20.4/60, 37+41.4/60, 4+32.4/60, 38+40.8/60, 5+24.9/60, 0, 290, 262, 92.8],
 ];
 
 // =========================================================================
@@ -1051,10 +1070,172 @@ const map = L.map('map', {
   zoomControl: true,
 });
 
+// Custom pane for canopy overlays — sits between tiles and default overlays
+map.createPane('canopyPane');
+map.getPane('canopyPane').style.zIndex = 350; // between tiles (200) and overlays (400)
+
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
   attribution: '© <a href="https://www.openstreetmap.org/copyright">OSM</a> © <a href="https://carto.com/">CARTO</a>',
   maxZoom: 19,
 }).addTo(map);
+
+// =========================================================================
+//  MAP OVERLAYS — Terrain hillshade + canopy height
+// =========================================================================
+
+// --- Hillshade (ESRI World Hillshade, free, no API key) ---
+const hillshadeLayer = L.tileLayer(
+  'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}', {
+  attribution: '© Esri',
+  maxZoom: 18,
+  opacity: 0.18,
+});
+hillshadeLayer.addTo(map);
+// Blend with dark base — apply after tiles load
+hillshadeLayer.getContainer && setTimeout(() => {
+  const c = hillshadeLayer.getContainer();
+  if (c) c.style.mixBlendMode = 'screen';
+}, 500);
+// Retry blend mode on first tile load
+hillshadeLayer.once('load', () => {
+  const c = hillshadeLayer.getContainer();
+  if (c) c.style.mixBlendMode = 'screen';
+});
+
+function toggleHillshade(on) {
+  if (on) { hillshadeLayer.addTo(map); }
+  else { map.removeLayer(hillshadeLayer); }
+}
+
+// --- Canopy overlay (renders our tiles as green semi-transparent overlays) ---
+let canopyOverlayEnabled = true;
+const canopyOverlays = new Map(); // tileKey → L.ImageOverlay
+
+function updateCanopyOverlays() {
+  if (!canopyOverlayEnabled || !canopyMeta || !canopyTileIndex) return;
+
+  const bounds = map.getBounds();
+  const zoom = map.getZoom();
+
+  // Only show canopy overlay at zoom >= 9 (avoids visual clutter at country scale)
+  if (zoom < 9) {
+    canopyOverlays.forEach((overlay) => map.removeLayer(overlay));
+    return;
+  }
+
+  // Determine which 1° tiles are visible
+  const latMin = Math.floor(bounds.getSouth());
+  const latMax = Math.floor(bounds.getNorth());
+  const lonMin = Math.floor(bounds.getWest());
+  const lonMax = Math.floor(bounds.getEast());
+
+  const visibleKeys = new Set();
+  for (let la = latMin; la <= latMax; la++) {
+    for (let lo = lonMin; lo <= lonMax; lo++) {
+      const key = `${la}_${lo}`;
+      visibleKeys.add(key);
+
+      if (canopyTileIndex.has(key) && !canopyOverlays.has(key)) {
+        // Load and display this tile
+        loadAndDisplayCanopyTile(key, la, lo);
+      }
+    }
+  }
+
+  // Remove tiles no longer visible
+  canopyOverlays.forEach((overlay, key) => {
+    if (!visibleKeys.has(key)) {
+      map.removeLayer(overlay);
+      canopyOverlays.delete(key);
+    }
+  });
+}
+
+async function loadAndDisplayCanopyTile(key, lat, lon) {
+  if (!canopyOverlayEnabled) return;
+
+  const fname = `canopy_${lat}_${lon}.png`;
+  try {
+    const img = new window.Image();
+    img.crossOrigin = 'anonymous';
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+      img.src = `${canopyTilesDir}/${fname}`;
+    });
+
+    // Draw at reduced size for map display (max 512px)
+    const maxDim = 512;
+    const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+    const w = Math.round(img.width * scale);
+    const h = Math.round(img.height * scale);
+
+    const srcCanvas = document.createElement('canvas');
+    srcCanvas.width = w;
+    srcCanvas.height = h;
+    const srcCtx = srcCanvas.getContext('2d');
+    srcCtx.drawImage(img, 0, 0, w, h);
+    const smallData = srcCtx.getImageData(0, 0, w, h);
+
+    // Recolor: grayscale height → green tint with alpha
+    const outCanvas = document.createElement('canvas');
+    outCanvas.width = w;
+    outCanvas.height = h;
+    const outCtx = outCanvas.getContext('2d');
+    const out = outCtx.createImageData(w, h);
+    const src = smallData.data;
+    const dst = out.data;
+
+    for (let i = 0; i < src.length; i += 4) {
+      const ht = src[i];
+      if (ht > 1) {
+        dst[i]     = 20;
+        dst[i + 1] = 80 + Math.min(175, ht * 4);
+        dst[i + 2] = 40;
+        dst[i + 3] = Math.min(160, 40 + ht * 3);
+      }
+    }
+    outCtx.putImageData(out, 0, 0);
+    const dataUrl = outCanvas.toDataURL();
+
+    const tileBounds = [[lat, lon], [lat + 1, lon + 1]];
+    const overlay = L.imageOverlay(dataUrl, tileBounds, {
+      opacity: 0.7,
+      interactive: false,
+      pane: 'canopyPane',
+    });
+
+    if (canopyOverlayEnabled) {
+      overlay.addTo(map);
+      canopyOverlays.set(key, overlay);
+    }
+  } catch (e) {
+    // Tile failed to load — skip silently
+  }
+}
+
+function toggleCanopyOverlay(on) {
+  canopyOverlayEnabled = on;
+  if (on) {
+    updateCanopyOverlays();
+  } else {
+    canopyOverlays.forEach((overlay) => map.removeLayer(overlay));
+    canopyOverlays.clear();
+  }
+}
+
+// Update canopy overlays on map move
+map.on('moveend zoomend', () => {
+  if (canopyOverlayEnabled) updateCanopyOverlays();
+});
+
+// Initial load after canopy metadata is ready
+const _origLoadCanopyMeta = loadCanopyMeta;
+loadCanopyMeta = async function() {
+  const result = await _origLoadCanopyMeta();
+  if (result) updateCanopyOverlays();
+  return result;
+};
 
 // Draw eclipse path
 function drawEclipsePath() {
@@ -1533,6 +1714,14 @@ function drawHorizonChart(r) {
 function switchTab(tabName) {
   document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tabName));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `tab-${tabName}`));
+  // Redraw charts when results tab becomes visible (canvases have zero size while hidden)
+  if (tabName === 'results') {
+    requestAnimationFrame(() => {
+      for (const r of results) {
+        if (r.azimuths) drawHorizonChart(r);
+      }
+    });
+  }
 }
 
 
