@@ -1,21 +1,42 @@
 {
-  "lat_min": 39,
+  "lat_min": 38,
   "lat_max": 45,
   "lon_min": -10,
-  "lon_max": 1,
+  "lon_max": 5,
   "tile_size_deg": 1,
   "resolution_m": 30,
-  "tile_width": 2800,
+  "tile_width": 2842,
   "tile_height": 3712,
   "encoding": "grayscale_uint8_metres",
   "source": "Meta/WRI Global Canopy Height Map 2024",
   "tiles": [
     {
+      "lat": 38,
+      "lon": -1,
+      "file": "canopy_38_-1.png",
+      "kb": 1126.4,
+      "max_h": 26
+    },
+    {
+      "lat": 38,
+      "lon": 0,
+      "file": "canopy_38_0.png",
+      "kb": 113.1,
+      "max_h": 21
+    },
+    {
+      "lat": 38,
+      "lon": 1,
+      "file": "canopy_38_1.png",
+      "kb": 167.0,
+      "max_h": 26
+    },
+    {
       "lat": 39,
       "lon": -1,
       "file": "canopy_39_-1.png",
-      "kb": 1754.8,
-      "max_h": 26
+      "kb": 1776.8,
+      "max_h": 25
     },
     {
       "lat": 39,
@@ -46,11 +67,39 @@
       "max_h": 17
     },
     {
+      "lat": 39,
+      "lon": 1,
+      "file": "canopy_39_1.png",
+      "kb": 102.3,
+      "max_h": 22
+    },
+    {
+      "lat": 39,
+      "lon": 2,
+      "file": "canopy_39_2.png",
+      "kb": 645.1,
+      "max_h": 27
+    },
+    {
+      "lat": 39,
+      "lon": 3,
+      "file": "canopy_39_3.png",
+      "kb": 459.5,
+      "max_h": 25
+    },
+    {
+      "lat": 39,
+      "lon": 4,
+      "file": "canopy_39_4.png",
+      "kb": 144.3,
+      "max_h": 24
+    },
+    {
       "lat": 40,
       "lon": -1,
       "file": "canopy_40_-1.png",
-      "kb": 2226.2,
-      "max_h": 27
+      "kb": 2258.0,
+      "max_h": 28
     },
     {
       "lat": 40,
@@ -112,15 +161,29 @@
       "lat": 40,
       "lon": 0,
       "file": "canopy_40_0.png",
-      "kb": 1412.9,
-      "max_h": 27
+      "kb": 1430.9,
+      "max_h": 26
+    },
+    {
+      "lat": 40,
+      "lon": 3,
+      "file": "canopy_40_3.png",
+      "kb": 41.3,
+      "max_h": 25
+    },
+    {
+      "lat": 40,
+      "lon": 4,
+      "file": "canopy_40_4.png",
+      "kb": 43.2,
+      "max_h": 24
     },
     {
       "lat": 41,
       "lon": -1,
       "file": "canopy_41_-1.png",
-      "kb": 672.6,
-      "max_h": 25
+      "kb": 681.2,
+      "max_h": 24
     },
     {
       "lat": 41,
@@ -182,8 +245,29 @@
       "lat": 41,
       "lon": 0,
       "file": "canopy_41_0.png",
-      "kb": 1878.0,
-      "max_h": 25
+      "kb": 1901.5,
+      "max_h": 24
+    },
+    {
+      "lat": 41,
+      "lon": 1,
+      "file": "canopy_41_1.png",
+      "kb": 2390.5,
+      "max_h": 28
+    },
+    {
+      "lat": 41,
+      "lon": 2,
+      "file": "canopy_41_2.png",
+      "kb": 1873.2,
+      "max_h": 29
+    },
+    {
+      "lat": 41,
+      "lon": 3,
+      "file": "canopy_41_3.png",
+      "kb": 161.8,
+      "max_h": 26
     },
     {
       "lat": 42,
