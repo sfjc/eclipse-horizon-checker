@@ -383,11 +383,13 @@
     <div class="map-layers">
       <label><input type="checkbox" id="hillshadeToggle" checked onchange="toggleHillshade(this.checked)"> ⛰ Terrain</label>
       <label><input type="checkbox" id="canopyMapToggle" checked onchange="toggleCanopyOverlay(this.checked)"> 🌲 Trees</label>
+      <label><input type="checkbox" id="clearanceToggle" onchange="toggleClearanceOverlay(this.checked)"> ☀ Clearance</label>
     </div>
     <div class="map-legend">
       <div class="legend-item"><div class="legend-swatch" style="background:var(--gold)"></div> Centerline</div>
       <div class="legend-item"><div class="legend-swatch" style="background:var(--gold); opacity:0.4"></div> Path of totality</div>
       <div class="legend-item"><div class="legend-swatch" style="background:rgba(60,180,90,0.7)"></div> Tree canopy</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:linear-gradient(90deg,rgba(220,50,50,0.7),rgba(60,180,90,0.7));height:3px"></div> Sun clearance</div>
       <div class="legend-item"><div class="legend-swatch" style="background:var(--corona); height:6px; width:6px; border-radius:50%;"></div> Your pins</div>
     </div>
   </div>
@@ -1101,6 +1103,10 @@ const map = L.map('map', {
 map.createPane('canopyPane');
 map.getPane('canopyPane').style.zIndex = 350; // between tiles (200) and overlays (400)
 
+// Custom pane for clearance overlays — sits below canopy
+map.createPane('clearancePane');
+map.getPane('clearancePane').style.zIndex = 340;
+
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
   attribution: '© <a href="https://www.openstreetmap.org/copyright">OSM</a> © <a href="https://carto.com/">CARTO</a>',
   maxZoom: 19,
@@ -1264,6 +1270,156 @@ loadCanopyMeta = async function() {
   if (result) updateCanopyOverlays();
   return result;
 };
+
+// =========================================================================
+//  CLEARANCE OVERLAY — pre-computed sun clearance raster
+// =========================================================================
+let clearanceOverlayEnabled = false;
+let clearanceMeta = null;
+let clearanceTileIndex = null;
+const clearanceOverlays = new Map();
+const clearanceTilesDir = 'clearance_tiles';
+
+async function loadClearanceMeta() {
+  try {
+    const resp = await fetch(`${clearanceTilesDir}/clearance.json`);
+    if (!resp.ok) return false;
+    clearanceMeta = await resp.json();
+    clearanceTileIndex = new Map();
+    for (const t of clearanceMeta.tiles) {
+      clearanceTileIndex.set(`${t.lat}_${t.lon}`, t);
+    }
+    console.log(`Clearance metadata loaded: ${clearanceMeta.tiles.length} tiles`);
+    return true;
+  } catch (e) {
+    console.log('No clearance tiles found (optional)');
+    return false;
+  }
+}
+
+function updateClearanceOverlays() {
+  if (!clearanceOverlayEnabled || !clearanceMeta || !clearanceTileIndex) return;
+
+  const bounds = map.getBounds();
+  const zoom = map.getZoom();
+
+  // Only show at zoom >= 8
+  if (zoom < 8) {
+    clearanceOverlays.forEach((overlay) => map.removeLayer(overlay));
+    return;
+  }
+
+  const latMin = Math.floor(bounds.getSouth());
+  const latMax = Math.floor(bounds.getNorth());
+  const lonMin = Math.floor(bounds.getWest());
+  const lonMax = Math.floor(bounds.getEast());
+
+  const visibleKeys = new Set();
+  for (let la = latMin; la <= latMax; la++) {
+    for (let lo = lonMin; lo <= lonMax; lo++) {
+      const key = `${la}_${lo}`;
+      visibleKeys.add(key);
+      if (clearanceTileIndex.has(key) && !clearanceOverlays.has(key)) {
+        loadAndDisplayClearanceTile(key, la, lo);
+      }
+    }
+  }
+
+  clearanceOverlays.forEach((overlay, key) => {
+    if (!visibleKeys.has(key)) {
+      map.removeLayer(overlay);
+      clearanceOverlays.delete(key);
+    }
+  });
+}
+
+async function loadAndDisplayClearanceTile(key, lat, lon) {
+  if (!clearanceOverlayEnabled) return;
+  const fname = `clearance_${lat}_${lon}.png`;
+  try {
+    const img = new window.Image();
+    img.crossOrigin = 'anonymous';
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+      img.src = `${clearanceTilesDir}/${fname}`;
+    });
+
+    // Draw to canvas and recolor
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    const imgData = ctx.getImageData(0, 0, img.width, img.height);
+    const src = imgData.data;
+    const out = ctx.createImageData(img.width, img.height);
+    const dst = out.data;
+
+    for (let i = 0; i < src.length; i += 4) {
+      const v = src[i]; // encoded margin value
+      if (v === 0) continue; // outside path — transparent
+
+      // Decode: margin = (v / 10) - 12.8
+      const margin = v / 10.0 - 12.8;
+
+      if (margin > 0) {
+        // Green — visible; brighter green = more clearance
+        const intensity = Math.min(1, margin / 5.0);
+        dst[i]     = 20;
+        dst[i + 1] = 100 + Math.round(155 * intensity);
+        dst[i + 2] = 40;
+        dst[i + 3] = 100 + Math.round(80 * intensity);
+      } else {
+        // Red — blocked; deeper red = more blocked
+        const intensity = Math.min(1, Math.abs(margin) / 5.0);
+        dst[i]     = 150 + Math.round(105 * intensity);
+        dst[i + 1] = 30;
+        dst[i + 2] = 30;
+        dst[i + 3] = 100 + Math.round(80 * intensity);
+      }
+    }
+    ctx.putImageData(out, 0, 0);
+    const dataUrl = canvas.toDataURL();
+
+    const tileBounds = [[lat, lon], [lat + 1, lon + 1]];
+    const overlay = L.imageOverlay(dataUrl, tileBounds, {
+      opacity: 0.6,
+      interactive: false,
+      pane: 'clearancePane',
+    });
+
+    if (clearanceOverlayEnabled) {
+      overlay.addTo(map);
+      clearanceOverlays.set(key, overlay);
+    }
+  } catch (e) {
+    // Tile not available — skip silently
+  }
+}
+
+function toggleClearanceOverlay(on) {
+  clearanceOverlayEnabled = on;
+  const pane = map.getPane('clearancePane');
+  if (on) {
+    if (pane) pane.style.display = '';
+    // Load metadata on first toggle
+    if (!clearanceMeta) {
+      loadClearanceMeta().then(ok => {
+        if (ok) updateClearanceOverlays();
+      });
+    } else {
+      updateClearanceOverlays();
+    }
+  } else {
+    if (pane) pane.style.display = 'none';
+  }
+}
+
+// Update clearance overlays on map move
+map.on('moveend zoomend', () => {
+  if (clearanceOverlayEnabled) updateClearanceOverlays();
+});
 
 // Draw eclipse path
 function drawEclipsePath() {
