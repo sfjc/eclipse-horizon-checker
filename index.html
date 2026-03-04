@@ -350,7 +350,7 @@
     width: 18px; height: 3px; border-radius: 2px; flex-shrink: 0;
   }
   .map-layers {
-    position: absolute; bottom: 28px; left: 12px; z-index: 800;
+    position: absolute; bottom: 52px; left: 12px; z-index: 800;
     background: rgba(17,24,39,0.92); backdrop-filter: blur(8px);
     border: 1px solid var(--border); border-radius: 8px;
     padding: 0.45rem 0.65rem; font-size: 0.7rem; color: var(--text-muted);
@@ -387,8 +387,8 @@
     <div class="map-legend">
       <div class="legend-item"><div class="legend-swatch" style="background:var(--gold)"></div> Centerline</div>
       <div class="legend-item"><div class="legend-swatch" style="background:var(--gold); opacity:0.4"></div> Path of totality</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:rgba(60,180,90,0.7)"></div> Tree canopy</div>
       <div class="legend-item"><div class="legend-swatch" style="background:var(--corona); height:6px; width:6px; border-radius:50%;"></div> Your pins</div>
-      <div class="legend-item"><div class="legend-swatch" style="background:rgba(60,180,90,0.7)"></div> Tree canopy (zoom in)</div>
     </div>
   </div>
 
@@ -1069,8 +1069,9 @@ async function analyzePin(pin, progressCb) {
     margin,
     canopyMargin,
     diskStatus,
-    visible: margin > 0,
+    visible: canopyStatus === 'available' ? canopyMargin > 0 : margin > 0,
     visibleCanopy: canopyMargin > 0,
+    visibleTerrain: margin > 0,
     canopyStatus,
     worstHorizon: Math.max(...angles),
     worstAz: azimuths[angles.indexOf(Math.max(...angles))],
@@ -1242,11 +1243,12 @@ async function loadAndDisplayCanopyTile(key, lat, lon) {
 
 function toggleCanopyOverlay(on) {
   canopyOverlayEnabled = on;
+  const pane = map.getPane('canopyPane');
   if (on) {
+    if (pane) pane.style.display = '';
     updateCanopyOverlays();
   } else {
-    canopyOverlays.forEach((overlay) => map.removeLayer(overlay));
-    canopyOverlays.clear();
+    if (pane) pane.style.display = 'none';
   }
 }
 
@@ -1517,8 +1519,18 @@ function renderResult(r, rank) {
   const vis = r.visible;
   const rankLabel = rank !== undefined ? `#${rank + 1} · ` : '';
   const durLabel = r.durSec > 0 ? r.durStr : '—';
-  const canopyWarn = r.canopyStatus === 'available' && r.visible && !r.visibleCanopy;
+  const treeBlocked = r.canopyStatus === 'available' && r.visibleTerrain && !r.visibleCanopy;
   const canopyExtra = r.canopyStatus === 'available' ? r.canopyAtSun - r.horizonAtSun : 0;
+
+  // Status badge
+  let statusBadge;
+  if (treeBlocked) {
+    statusBadge = '<span class="badge" style="background:#2a4a2a;color:#6d6">🌲 Blocked by trees</span>';
+  } else if (vis) {
+    statusBadge = '<span class="badge badge-visible">Visible</span>';
+  } else {
+    statusBadge = '<span class="badge badge-blocked">Blocked</span>';
+  }
 
   // Solar disk status badge
   let diskBadge = '';
@@ -1532,9 +1544,8 @@ function renderResult(r, rank) {
     <div class="result-card ${vis ? 'visible' : 'blocked'}">
       <div class="result-name">
         ${r.name}
-        <span class="badge ${vis ? 'badge-visible' : 'badge-blocked'}">${vis ? 'Visible' : 'Blocked'}</span>
+        ${statusBadge}
         ${diskBadge}
-        ${canopyWarn ? '<span class="badge" style="background:#2a4a2a;color:#6d6">🌲 Tree risk</span>' : ''}
       </div>
       <div class="result-stats">
         <div class="stat">
