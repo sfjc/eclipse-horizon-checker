@@ -1520,7 +1520,6 @@ function renderResult(r, rank) {
   const rankLabel = rank !== undefined ? `#${rank + 1} · ` : '';
   const durLabel = r.durSec > 0 ? r.durStr : '—';
   const treeBlocked = r.canopyStatus === 'available' && r.visibleTerrain && !r.visibleCanopy;
-  const canopyExtra = r.canopyStatus === 'available' ? r.canopyAtSun - r.horizonAtSun : 0;
 
   // Status badge
   let statusBadge;
@@ -1553,27 +1552,24 @@ function renderResult(r, rank) {
           <div class="stat-value" style="color:var(--gold)">${durLabel}</div>
         </div>
         <div class="stat">
-          <div class="stat-label">Clearance</div>
+          <div class="stat-label">Terrain clearance</div>
           <div class="stat-value ${r.margin >= 0 ? 'positive' : 'negative'}">${r.margin >= 0 ? '+' : ''}${r.margin.toFixed(1)}°</div>
         </div>
+        ${r.canopyStatus === 'available' ? `
+        <div class="stat">
+          <div class="stat-label">🌲 With trees</div>
+          <div class="stat-value ${r.canopyMargin >= 0 ? 'positive' : 'negative'}">${r.canopyMargin >= 0 ? '+' : ''}${r.canopyMargin.toFixed(1)}°</div>
+        </div>
+        ` : ''}
         <div class="stat">
           <div class="stat-label">Sun altitude</div>
           <div class="stat-value">${r.sunAlt.toFixed(1)}°</div>
-        </div>
-        <div class="stat">
-          <div class="stat-label">Horizon</div>
-          <div class="stat-value">${r.horizonAtSun.toFixed(1)}°</div>
         </div>
         <div class="stat">
           <div class="stat-label">Ground elev</div>
           <div class="stat-value">${r.groundElev} m</div>
         </div>
       </div>
-      ${canopyExtra > 0.1 ? `
-        <div style="font-size:0.72rem;color:#6d6;margin:0.3rem 0;padding:0.3rem 0.5rem;background:rgba(40,80,40,0.2);border-radius:4px">
-          🌲 Trees add ≈${canopyExtra.toFixed(1)}° to horizon · Canopy margin: ${r.canopyMargin >= 0 ? '+' : ''}${r.canopyMargin.toFixed(1)}°
-        </div>
-      ` : ''}
       <div class="horizon-chart"><canvas id="chart-${r.id}"></canvas></div>
       <div style="font-size:0.68rem;color:var(--text-dim);margin-top:0.35rem;font-family:JetBrains Mono,monospace">
         ${rankLabel}${r.lat.toFixed(4)}°N, ${Math.abs(r.lon).toFixed(4)}°${r.lon >= 0 ? 'E' : 'W'} · Sun az ${r.sunAz.toFixed(0)}°
