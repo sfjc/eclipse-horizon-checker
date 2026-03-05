@@ -1273,12 +1273,14 @@ loadCanopyMeta = async function() {
 
 // =========================================================================
 //  CLEARANCE OVERLAY — pre-computed sun clearance raster
+//  Progressive loading: overview tiles first, full-res on zoom in
 // =========================================================================
 let clearanceOverlayEnabled = false;
 let clearanceMeta = null;
 let clearanceTileIndex = null;
-const clearanceOverlays = new Map();
+const clearanceOverlays = new Map();   // key → { overview: L.ImageOverlay, full: L.ImageOverlay }
 const clearanceTilesDir = 'clearance_tiles';
+const CLEARANCE_FULL_ZOOM = 10;        // load full-res at this zoom and above
 
 async function loadClearanceMeta() {
   try {
@@ -1297,15 +1299,52 @@ async function loadClearanceMeta() {
   }
 }
 
+function recolorClearance(img) {
+  const canvas = document.createElement('canvas');
+  canvas.width = img.width;
+  canvas.height = img.height;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  const imgData = ctx.getImageData(0, 0, img.width, img.height);
+  const src = imgData.data;
+  const out = ctx.createImageData(img.width, img.height);
+  const dst = out.data;
+
+  for (let i = 0; i < src.length; i += 4) {
+    const v = src[i];
+    if (v === 0) continue; // outside path — transparent
+
+    const margin = v / 10.0 - 12.8;
+
+    if (margin > 0) {
+      const intensity = Math.min(1, margin / 5.0);
+      dst[i]     = 20;
+      dst[i + 1] = 100 + Math.round(155 * intensity);
+      dst[i + 2] = 40;
+      dst[i + 3] = 100 + Math.round(80 * intensity);
+    } else {
+      const intensity = Math.min(1, Math.abs(margin) / 5.0);
+      dst[i]     = 150 + Math.round(105 * intensity);
+      dst[i + 1] = 30;
+      dst[i + 2] = 30;
+      dst[i + 3] = 100 + Math.round(80 * intensity);
+    }
+  }
+  ctx.putImageData(out, 0, 0);
+  return canvas.toDataURL();
+}
+
 function updateClearanceOverlays() {
   if (!clearanceOverlayEnabled || !clearanceMeta || !clearanceTileIndex) return;
 
   const bounds = map.getBounds();
   const zoom = map.getZoom();
 
-  // Only show at zoom >= 8
-  if (zoom < 8) {
-    clearanceOverlays.forEach((overlay) => map.removeLayer(overlay));
+  if (zoom < 7) {
+    clearanceOverlays.forEach(entry => {
+      if (entry.overview) map.removeLayer(entry.overview);
+      if (entry.full) map.removeLayer(entry.full);
+    });
     return;
   }
 
@@ -1315,73 +1354,69 @@ function updateClearanceOverlays() {
   const lonMax = Math.floor(bounds.getEast());
 
   const visibleKeys = new Set();
+  const wantFull = zoom >= CLEARANCE_FULL_ZOOM;
+
   for (let la = latMin; la <= latMax; la++) {
     for (let lo = lonMin; lo <= lonMax; lo++) {
       const key = `${la}_${lo}`;
       visibleKeys.add(key);
-      if (clearanceTileIndex.has(key) && !clearanceOverlays.has(key)) {
-        loadAndDisplayClearanceTile(key, la, lo);
+
+      if (!clearanceTileIndex.has(key)) continue;
+
+      const entry = clearanceOverlays.get(key) || {};
+      const needsInit = !entry.overview && !entry.full;
+
+      if (needsInit) {
+        // Load overview immediately (small file, fast)
+        entry.overview = null;
+        entry.full = null;
+        clearanceOverlays.set(key, entry);
+        loadClearanceTileLevel(key, la, lo, 'overview');
+      }
+
+      // If zoomed in enough and we don't have full-res yet, start loading
+      if (wantFull && entry.full === null && !entry._fullLoading) {
+        entry._fullLoading = true;
+        loadClearanceTileLevel(key, la, lo, 'full');
+      }
+
+      // Show the best available layer
+      if (entry.full && entry.full !== null) {
+        if (!map.hasLayer(entry.full)) entry.full.addTo(map);
+        if (entry.overview && map.hasLayer(entry.overview)) map.removeLayer(entry.overview);
+      } else if (entry.overview && entry.overview !== null) {
+        if (!map.hasLayer(entry.overview)) entry.overview.addTo(map);
       }
     }
   }
 
-  clearanceOverlays.forEach((overlay, key) => {
+  // Remove tiles no longer visible
+  clearanceOverlays.forEach((entry, key) => {
     if (!visibleKeys.has(key)) {
-      map.removeLayer(overlay);
+      if (entry.overview) map.removeLayer(entry.overview);
+      if (entry.full) map.removeLayer(entry.full);
       clearanceOverlays.delete(key);
     }
   });
 }
 
-async function loadAndDisplayClearanceTile(key, lat, lon) {
+async function loadClearanceTileLevel(key, lat, lon, level) {
   if (!clearanceOverlayEnabled) return;
   const fname = `clearance_${lat}_${lon}.png`;
+  const path = level === 'overview'
+    ? `${clearanceTilesDir}/overview/${fname}`
+    : `${clearanceTilesDir}/${fname}`;
+
   try {
     const img = new window.Image();
     img.crossOrigin = 'anonymous';
     await new Promise((resolve, reject) => {
       img.onload = resolve;
       img.onerror = reject;
-      img.src = `${clearanceTilesDir}/${fname}`;
+      img.src = path;
     });
 
-    // Draw to canvas and recolor
-    const canvas = document.createElement('canvas');
-    canvas.width = img.width;
-    canvas.height = img.height;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(img, 0, 0);
-    const imgData = ctx.getImageData(0, 0, img.width, img.height);
-    const src = imgData.data;
-    const out = ctx.createImageData(img.width, img.height);
-    const dst = out.data;
-
-    for (let i = 0; i < src.length; i += 4) {
-      const v = src[i]; // encoded margin value
-      if (v === 0) continue; // outside path — transparent
-
-      // Decode: margin = (v / 10) - 12.8
-      const margin = v / 10.0 - 12.8;
-
-      if (margin > 0) {
-        // Green — visible; brighter green = more clearance
-        const intensity = Math.min(1, margin / 5.0);
-        dst[i]     = 20;
-        dst[i + 1] = 100 + Math.round(155 * intensity);
-        dst[i + 2] = 40;
-        dst[i + 3] = 100 + Math.round(80 * intensity);
-      } else {
-        // Red — blocked; deeper red = more blocked
-        const intensity = Math.min(1, Math.abs(margin) / 5.0);
-        dst[i]     = 150 + Math.round(105 * intensity);
-        dst[i + 1] = 30;
-        dst[i + 2] = 30;
-        dst[i + 3] = 100 + Math.round(80 * intensity);
-      }
-    }
-    ctx.putImageData(out, 0, 0);
-    const dataUrl = canvas.toDataURL();
-
+    const dataUrl = recolorClearance(img);
     const tileBounds = [[lat, lon], [lat + 1, lon + 1]];
     const overlay = L.imageOverlay(dataUrl, tileBounds, {
       opacity: 0.6,
@@ -1389,12 +1424,32 @@ async function loadAndDisplayClearanceTile(key, lat, lon) {
       pane: 'clearancePane',
     });
 
-    if (clearanceOverlayEnabled) {
+    if (!clearanceOverlayEnabled) return;
+    const entry = clearanceOverlays.get(key);
+    if (!entry) return;
+
+    if (level === 'overview') {
+      entry.overview = overlay;
+      // Show overview unless full-res already loaded
+      if (!entry.full) overlay.addTo(map);
+    } else {
+      entry.full = overlay;
+      // Swap in full-res, remove overview
       overlay.addTo(map);
-      clearanceOverlays.set(key, overlay);
+      if (entry.overview && map.hasLayer(entry.overview)) {
+        map.removeLayer(entry.overview);
+      }
     }
   } catch (e) {
-    // Tile not available — skip silently
+    // Overview might not exist — fall back to loading full-res directly
+    if (level === 'overview') {
+      const entry = clearanceOverlays.get(key);
+      if (entry) {
+        entry.overview = false; // mark as unavailable
+        entry._fullLoading = true;
+        loadClearanceTileLevel(key, lat, lon, 'full');
+      }
+    }
   }
 }
 
@@ -1403,7 +1458,6 @@ function toggleClearanceOverlay(on) {
   const pane = map.getPane('clearancePane');
   if (on) {
     if (pane) pane.style.display = '';
-    // Load metadata on first toggle
     if (!clearanceMeta) {
       loadClearanceMeta().then(ok => {
         if (ok) updateClearanceOverlays();

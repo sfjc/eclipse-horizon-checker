@@ -4,6 +4,9 @@
   "ray_step_m": 90,
   "observer_height_m": 2.0,
   "includes_canopy": true,
+  "has_overview": true,
+  "overview_scale": 8,
+  "overview_dir": "overview",
   "encoding": "uint8, value = (margin_deg + 12.8) * 10, 128 = 0\u00b0",
   "tiles": [
     {

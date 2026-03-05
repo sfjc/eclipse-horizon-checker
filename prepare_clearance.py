@@ -624,6 +624,17 @@ def compute_clearance_tile(tile_lat: int, tile_lon: int,
     # Compute margins
     flat_margins = sun_alts_flat - max_angles
 
+    # Sea fix: SRTM ocean = 0m elevation. Points at/below sea level are open
+    # ocean with no terrain obstructions — force a large positive margin to
+    # prevent false red artifacts from coastal features along the ray.
+    ground_elevs = obs_elevs - observer_h  # undo observer height to get ground
+    sea_mask = ground_elevs <= 1.0
+    if sea_mask.any():
+        flat_margins[sea_mask] = 15.0  # guaranteed clear from open ocean
+        n_sea = sea_mask.sum()
+        print(f"    Sea fix: {n_sea} ocean points forced visible "
+              f"({n_sea / n_active * 100:.0f}%)")
+
     # Assemble result grid (NaN for outside-path points)
     margin_grid = np.full((n_rows, n_cols), np.nan, dtype=np.float32)
     margin_grid[in_path] = flat_margins
@@ -646,6 +657,21 @@ def encode_margin_png(margin: np.ndarray, path: Path) -> int:
     img = Image.fromarray(encoded, mode="L")
     img.save(path, optimize=True)
     return path.stat().st_size
+
+
+def generate_overview(full_path: Path, overview_path: Path,
+                      scale: int = 8) -> int:
+    """Downsample a clearance PNG by `scale` factor for fast map preview.
+    Returns file size in bytes."""
+    from PIL import Image
+
+    img = Image.open(full_path)
+    new_w = max(1, img.width // scale)
+    new_h = max(1, img.height // scale)
+    # Use NEAREST to preserve encoded margin values (not interpolate)
+    small = img.resize((new_w, new_h), Image.NEAREST)
+    small.save(overview_path, optimize=True)
+    return overview_path.stat().st_size
 
 
 def _process_tile(lat_lon: tuple[int, int], kwargs: dict) -> dict | None:
@@ -674,12 +700,19 @@ def _process_tile(lat_lon: tuple[int, int], kwargs: dict) -> dict | None:
     fpath = kwargs["output_dir"] / fname
     fsize = encode_margin_png(margin, fpath)
 
+    # Generate low-res overview for fast map browsing
+    overview_dir = kwargs["output_dir"] / "overview"
+    overview_dir.mkdir(exist_ok=True)
+    ov_path = overview_dir / fname
+    ov_size = generate_overview(fpath, ov_path, scale=8)
+
     valid = margin[~np.isnan(margin)]
     tile_info = {
         "lat": lat,
         "lon": lon,
         "file": fname,
         "kb": round(fsize / 1024, 1),
+        "overview_kb": round(ov_size / 1024, 1),
         "rows": int(margin.shape[0]),
         "cols": int(margin.shape[1]),
         "margin_min": round(float(valid.min()), 2),
@@ -809,6 +842,9 @@ def main() -> None:
         "ray_step_m": args.ray_step_m,
         "observer_height_m": args.observer_height,
         "includes_canopy": use_canopy,
+        "has_overview": True,
+        "overview_scale": 8,
+        "overview_dir": "overview",
         "encoding": "uint8, value = (margin_deg + 12.8) * 10, 128 = 0°",
         "source": "SRTM GL1 30m" + (" + Meta/WRI Canopy Height" if use_canopy else "")
                   + " + NASA/Espenak eclipse path",
